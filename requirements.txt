@@ -1,5 +1,5 @@
 python-telegram-bot==20.7
-aiogram==3.22.0
 Pillow==10.0.0
 python-dotenv==1.0.0
 redis==4.5.4
+# удалите aiogram из зависимостей
