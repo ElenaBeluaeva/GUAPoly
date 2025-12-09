@@ -5,30 +5,24 @@ load_dotenv()
 
 
 class Config:
-    """Конфигурация приложения"""
+    """Конфигурация бота Монополии"""
 
-    # Основные настройки
-    BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+    # Токен бота
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "8440935363:AAEe9pvkrYL3G-CLzcRXw9Qyy-aZLRVkX04")
 
     # Настройки игры
     START_MONEY = 1500
     MAX_PLAYERS = 8
     BOARD_SIZE = 40
+    SALARY = 200
+    JAIL_FINE = 50
 
-    # Админы (добавьте свои ID через запятую)
-    ADMIN_IDS = [844010980, 1373462530]  # Замените на ваш ID
+    # Путь к базе данных
+    DB_PATH = "data/games.db"
 
-    @staticmethod
-    def validate():
-        """Проверка конфигурации"""
-        print("🎲 Конфигурация Монополии:")
-        print(f"✅ BOT_TOKEN: {'установлен' if Config.BOT_TOKEN != 'YOUR_BOT_TOKEN_HERE' else '❌ НЕ УСТАНОВЛЕН'}")
-        print(f"✅ START_MONEY: ${Config.START_MONEY}")
-        print(f"✅ MAX_PLAYERS: {Config.MAX_PLAYERS}")
-        print(f"✅ ADMIN_IDS: {Config.ADMIN_IDS}")
-
-        if Config.BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-            print("\n⚠️  Получите токен у @BotFather и добавьте в .env файл!")
+    # Цвета для игроков
+    PLAYER_COLORS = ["🔴", "🔵", "🟢", "🟡", "🟣", "🟠", "⚫", "⚪"]
 
 
-Config.validate()
+print("🎲 Конфигурация загружена")
+print(f"🔧 Бот будет работать для всех пользователей!")

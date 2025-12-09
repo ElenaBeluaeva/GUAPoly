@@ -1,153 +1,224 @@
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple, Any
-from enum import Enum
 import random
-import json
+import string
+import logging
+
+# В начале класса или файла
+logger = logging.getLogger(__name__)
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Any
+from enum import Enum
+# В game.py убедитесь, что у вас нет импорта Player в самом начале
+# Вместо этого используйте только:
+from config import Config
+from board import Board, BoardCell, PropertyCell, StationCell, UtilityCell
 
-from .player import Player, PlayerStatus
-from .board import Board, CellType
-
-
+# Сначала определяем базовые классы и константы
 class GameState(Enum):
-    LOBBY = "lobby"  # Сбор игроков
-    IN_PROGRESS = "in_game"  # Игра идет
-    PAUSED = "paused"  # Пауза
-    FINISHED = "finished"  # Игра завершена
-    AUCTION = "auction"  # Аукцион
-    TRADE = "trade"  # Торговля
+    LOBBY = "lobby"
+    IN_PROGRESS = "in_game"  # <-- вот это значение!
+    AUCTION = "auction"
+    TRADE = "trade"
+    FINISHED = "finished"
 
 
-@dataclass
-class Auction:
-    """Аукцион"""
-    property_id: int
-    current_bid: int = 0
-    current_bidder_id: Optional[int] = None
-    participants: List[int] = field(default_factory=list)
-    active: bool = False
+# Конфигурация (если Config не импортируется)
+class GameConfig:
+    START_MONEY = 1500
+    MAX_PLAYERS = 8
+    BOARD_SIZE = 40
+    SALARY = 200
+    JAIL_FINE = 50
+    MIN_AUCTION_BID = 10
+
+    # Карточки Шанс
+    CHANCE_CARDS = [
+        {"text": "Отправляйтесь на клетку 'Старт'", "action": "move_to", "value": 0},
+        {"text": "Отправляйтесь в тюрьму", "action": "go_to_jail"},
+        {"text": "Получите $50", "action": "add_money", "value": 50},
+        {"text": "Заплатите $15", "action": "deduct_money", "value": 15},
+        {"text": "Освобождение из тюрьмы", "action": "get_out_of_jail"},
+    ]
+
+    # Карточки Казна
+    CHEST_CARDS = [
+        {"text": "Вы выиграли конкурс красоты. Получите $20", "action": "add_money", "value": 20},
+        {"text": "Оплатите налог на образование $100", "action": "deduct_money", "value": 100},
+        {"text": "Вы получили наследство $100", "action": "add_money", "value": 100},
+    ]
 
 
-@dataclass
-class TradeOffer:
-    """Предложение торговли"""
-    from_player_id: int
-    to_player_id: int
-    offer_money: int = 0
-    offer_properties: List[int] = field(default_factory=list)
-    request_money: int = 0
-    request_properties: List[int] = field(default_factory=list)
-    status: str = "pending"  # pending, accepted, rejected
+# Сначала определяем Player внутри, чтобы избежать круговых импортов
+class PlayerStatus(Enum):
+    ACTIVE = "active"
+    BANKRUPT = "bankrupt"
+    IN_JAIL = "in_jail"
 
 
+class SimplePlayer:
+    """Упрощенный класс игрока для использования в Game"""
+    def __init__(self, user_id: int, username: str, full_name: str):
+        self.user_id = user_id
+        self.username = username
+        self.full_name = full_name
+        self.position = 0
+        self.money = Config.START_MONEY  # или GameConfig.START_MONEY
+        self.properties = []
+        self.stations = []
+        self.utilities = []
+        self.in_jail = False
+        self.jail_turns = 0
+        self.get_out_of_jail_cards = 0
+        self.color = "🔴"
+        self.status = PlayerStatus.ACTIVE  # Убедитесь, что PlayerStatus определен
+        self.double_count = 0
+        self.total_rent_received = 0
+        self.user_id = user_id
+        # Основные атрибуты
+        self.position = 0  # текущая позиция на поле
+        self.money = 1500  # стартовый капитал
+        self.in_jail = False
+        self.get_out_of_jail_cards = 0  # карточки "Выход из тюрьмы"
+
+        # Статистика
+        self.total_rent_received = 0  # получено ренты
+        self.total_rent_paid = 0  # уплачено ренты
+        self.total_salary = 0  # получено зарплаты
+        self.total_taxes_paid = 0  # уплачено налогов
+        self.turns_played = 0  # сыграно ходов
+
+        # Временные состояния
+        self.doubles_count = 0  # счетчик дублей
+        self.is_bankrupt = False
+        self.is_ai = False
+
+
+    def add_money(self, amount: int) -> bool:
+        self.money += amount
+        return True
+
+    def deduct_money(self, amount: int) -> bool:
+        if self.money >= amount:
+            self.money -= amount
+            return True
+        return False
+
+    def can_afford(self, amount: int) -> bool:
+        return self.money >= amount
+
+    def go_to_jail(self):
+        self.position = 10
+        self.in_jail = True
+        self.jail_turns = 0
+        self.status = PlayerStatus.IN_JAIL
+
+    def release_from_jail(self):
+        self.in_jail = False
+        self.jail_turns = 0
+        self.status = PlayerStatus.ACTIVE
+
+    def is_bankrupt(self) -> bool:
+        return self.status == PlayerStatus.BANKRUPT or self.money < 0
+
+
+# Упрощенная версия Board
+class SimpleBoard:
+    def __init__(self):
+        self.cells = []
+        self._init_board()
+
+    def _init_board(self):
+        """Создаем упрощенное поле"""
+        # Базовые клетки
+        for i in range(40):
+            self.cells.append({
+                'id': i,
+                'name': f'Клетка {i}',
+                'price': 0,
+                'owner_id': None,
+                'type': 'street' if i % 2 == 0 else 'other'
+            })
+
+    def get_cell(self, position: int):
+        return self.cells[position % len(self.cells)]
+
+    def get_rent_for_cell(self, position: int, dice_roll: int = 0) -> int:
+        """Простой расчет ренты"""
+        cell = self.get_cell(position)
+        if not cell.get('owner_id'):
+            return 0
+        return 50  # Фиксированная рента для теста
+
+
+# Теперь класс Game
 class Game:
-    """Класс игры"""
+    """Класс игры с упрощенными зависимостями"""
 
     def __init__(self, game_id: str, creator_id: int):
         self.game_id = game_id
         self.creator_id = creator_id
-        self.created_at = datetime.now()
-
-        # Состояние игры
-        self.state: GameState = GameState.LOBBY
-        self.players: Dict[int, Player] = {}
+        self.players: Dict[int, SimplePlayer] = {}
         self.player_order: List[int] = []
-        self.current_player_index: int = 0
-        self.board = Board()
-
-        # Игровые механики
-        self.double_count: int = 0  # Счетчик дублей
-        self.auction: Optional[Auction] = None
-        self.trade_offers: Dict[str, TradeOffer] = {}
-        self.chance_cards: List[str] = []
-        self.chest_cards: List[str] = []
-        self.free_parking_pot: int = 0
-
-        # Настройки
-        self.salary_amount: int = 200
-        self.jail_fine: int = 50
-
-        self._init_cards()
-
-    def _init_cards(self):
-        """Инициализация карточек"""
-        self.chance_cards = [
-            "Пройдите на 'Старт'. Получите 200$",
-            "Отправляйтесь в тюрьму. Не проходите 'Старт' и не получайте 200$",
-            "Заплатите каждому игроку по 50$",
-            "Вы получаете наследство в 100$",
-            "Оплатите ремонт улиц: 25$ за дом, 100$ за отель",
-            "Вы выиграли конкурс красоты. Получите 10$",
-            "Вас выпустили из тюрьмы. Карточку можно сохранить",
-            "Заплатите налог 15$",
-            "Вернитесь на 3 клетки назад",
-            "Пройдите на ближайшую коммунальную службу",
-            "Пройдите на ближайший вокзал",
-            "Ваш рентный доход увеличился. Получите 150$"
-        ]
-
-        self.chest_cards = [
-            "Ошибка банка в вашу пользу. Получите 200$",
-            "Вторая премия за конкурс красоты. Получите 10$",
-            "Вы заняли второе место в конкурсе. Получите 100$",
-            "Заплатите больничный сбор 100$",
-            "Выпуск из тюрьмы. Карточку можно сохранить",
-            "Оплатите обучение 50$",
-            "Получите проценты по вкладу 25$",
-            "Получите доход от аренды 100$",
-            "Заплатите страховку 50$",
-            "Получите компенсацию 20$"
-        ]
+        self.current_player_index = 0
+        self.state = GameState.LOBBY
+        self.created_at = datetime.now()
+        self.double_count = 0
+        self.turn_count = 0
+        self.board = SimpleBoard()
+        self.free_parking_pot = 0
+        self.auction_data: Optional[Dict] = None
+        self.trade_data: Optional[Dict] = None
+        self.chance_deck: List[Dict] = GameConfig.CHANCE_CARDS.copy()
+        self.chest_deck: List[Dict] = GameConfig.CHEST_CARDS.copy()
+        random.shuffle(self.chance_deck)
+        random.shuffle(self.chest_deck)
 
     def add_player(self, user_id: int, username: str, full_name: str) -> bool:
-        """Добавить игрока"""
-        if self.state != GameState.LOBBY:
-            return False
-
+        """Добавить игрока в игру"""
         if user_id in self.players:
             return False
+        if self.state != GameState.LOBBY:
+            return False
+        if len(self.players) >= GameConfig.MAX_PLAYERS:
+            return False
 
-        player = Player(user_id, username, full_name)
+        player = SimplePlayer(user_id, username, full_name)
         self.players[user_id] = player
-
-        # Первый игрок - создатель
-        if len(self.players) == 1:
-            self.player_order.append(user_id)
-
         return True
 
     def remove_player(self, user_id: int):
-        """Удалить игрока"""
+        """Удалить игрока из игры"""
         if user_id in self.players:
-            del self.players[user_id]
             if user_id in self.player_order:
                 self.player_order.remove(user_id)
+                if self.current_player_index >= len(self.player_order):
+                    self.current_player_index = 0
+            del self.players[user_id]
 
     def start_game(self) -> bool:
         """Начать игру"""
+        logger.info(f"Starting game. Current state: {self.state}, Players: {len(self.players)}")
+
         if len(self.players) < 2:
+            logger.warning("Not enough players to start")
             return False
 
         if self.state != GameState.LOBBY:
+            logger.warning(f"Cannot start game. Current state is {self.state}, not LOBBY")
             return False
 
-        # Перемешать порядок игроков
-        random.shuffle(self.player_order)
-
-        # Установить начальные позиции
-        for player in self.players.values():
-            player.position = 0
-            player.money = 1500
-
         self.state = GameState.IN_PROGRESS
+        self.player_order = list(self.players.keys())
+        random.shuffle(self.player_order)
         self.current_player_index = 0
+        self.turn_count = 1
+
+        logger.info(f"Game started successfully. New state: {self.state}")
         return True
 
-    def get_current_player(self) -> Optional[Player]:
+    def get_current_player(self) -> Optional[SimplePlayer]:
         """Получить текущего игрока"""
         if not self.player_order:
             return None
-
         current_id = self.player_order[self.current_player_index]
         return self.players.get(current_id)
 
@@ -158,437 +229,272 @@ class Game:
 
         self.current_player_index = (self.current_player_index + 1) % len(self.player_order)
         self.double_count = 0
+        self.turn_count += 1
 
     def roll_dice(self) -> Tuple[int, int, int]:
-        """Бросок кубиков"""
+        """Бросить кубики"""
         dice1 = random.randint(1, 6)
         dice2 = random.randint(1, 6)
-        return dice1, dice2, dice1 + dice2
+        total = dice1 + dice2
 
-    def move_player(self, player: Player, steps: int) -> Dict[str, Any]:
+        if dice1 == dice2:
+            self.double_count += 1
+        else:
+            self.double_count = 0
+
+        return dice1, dice2, total
+
+    def move_player(self, player: SimplePlayer, steps: int) -> Dict[str, Any]:
         """Переместить игрока"""
         old_position = player.position
-        player.position = (player.position + steps) % 40
+        new_position = (old_position + steps) % GameConfig.BOARD_SIZE
+        player.position = new_position
 
-        result = {
+        passed_start = (old_position + steps) >= GameConfig.BOARD_SIZE
+        salary = GameConfig.SALARY if passed_start else 0
+
+        if passed_start:
+            player.add_money(salary)
+
+        return {
             "old_position": old_position,
-            "new_position": player.position,
-            "passed_go": False
+            "new_position": new_position,
+            "passed_start": passed_start,
+            "salary": salary
         }
 
-        # Проверка прохождения "Старта"
-        if old_position + steps >= 40:
-            player.add_money(self.salary_amount)
-            result["passed_go"] = True
-            result["salary"] = self.salary_amount
-
-        return result
-
-    def process_cell_action(self, player: Player, dice_roll: int = 0) -> Dict[str, Any]:
+    def process_cell_action(self, player: SimplePlayer, dice_roll: int = 0) -> Dict[str, Any]:
         """Обработать действие клетки"""
         cell = self.board.get_cell(player.position)
         result = {
             "cell": cell,
             "action": None,
             "message": "",
-            "rent": 0,
-            "owner_id": None
+            "owner_id": None,
+            "rent": 0
         }
 
-        if cell.type == CellType.PROPERTY:
-            if hasattr(cell, 'owner_id'):
-                if cell.owner_id is None:
-                    result["action"] = "buy_property"
-                    result["message"] = f"Вы можете купить {cell.name} за {cell.price}$"
-                elif cell.owner_id != player.user_id:
-                    # Выплатить ренту
-                    owner_assets = self.board.get_owner_assets(cell.owner_id)
-                    rent = cell.get_rent(dice_roll, owner_assets)
-                    result["action"] = "pay_rent"
-                    result["rent"] = rent
-                    result["owner_id"] = cell.owner_id
-                    result["message"] = f"Вы должны заплатить ренту {rent}$"
-
-        elif cell.type == CellType.STATION:
-            if hasattr(cell, 'owner_id'):
-                if cell.owner_id is None:
-                    result["action"] = "buy_station"
-                elif cell.owner_id != player.user_id:
-                    owner_assets = self.board.get_owner_assets(cell.owner_id)
-                    rent = cell.get_rent(dice_roll, owner_assets)
-                    result["action"] = "pay_rent"
-                    result["rent"] = rent
-                    result["owner_id"] = cell.owner_id
-
-        elif cell.type == CellType.UTILITY:
-            if hasattr(cell, 'owner_id'):
-                if cell.owner_id is None:
-                    result["action"] = "buy_utility"
-                elif cell.owner_id != player.user_id:
-                    owner_assets = self.board.get_owner_assets(cell.owner_id)
-                    rent = cell.get_rent(dice_roll, owner_assets)
-                    result["action"] = "pay_rent"
-                    result["rent"] = rent
-                    result["owner_id"] = cell.owner_id
-
-        elif cell.type == CellType.CHANCE:
-            result["action"] = "chance"
-            card = random.choice(self.chance_cards)
-            result["message"] = f"Шанс: {card}"
-            self._process_chance_card(player, card)
-
-        elif cell.type == CellType.CHEST:
-            result["action"] = "chest"
-            card = random.choice(self.chest_cards)
-            result["message"] = f"Казна: {card}"
-            self._process_chest_card(player, card)
-
-        elif cell.type == CellType.TAX:
-            tax = 200 if cell.name == "Подоходный налог" else 100
-            result["action"] = "pay_tax"
-            result["rent"] = tax
-            result["message"] = f"Заплатите налог {tax}$"
-
-        elif cell.type == CellType.GO_TO_JAIL:
-            result["action"] = "go_to_jail"
-            player.go_to_jail()
-            result["message"] = "Вы отправляетесь в тюрьму!"
-
-        elif cell.type == CellType.FREE_PARKING:
-            result["action"] = "free_parking"
-            if self.free_parking_pot > 0:
-                player.add_money(self.free_parking_pot)
-                result["message"] = f"Вы получаете {self.free_parking_pot}$ с бесплатной стоянки!"
-                self.free_parking_pot = 0
+        # Простая логика для разных типов клеток
+        if cell['type'] == 'street':
+            if not cell['owner_id']:
+                result["action"] = "buy_property"
+                result["message"] = f"Свободная улица! Цена: $100"
+            elif cell['owner_id'] == player.user_id:
+                result["action"] = "own_property"
+                result["message"] = "Это ваша собственность!"
+            else:
+                result["action"] = "pay_rent"
+                result["owner_id"] = cell['owner_id']
+                result["rent"] = 50
+                result["message"] = f"Чужая собственность! Рента: $50"
+        else:
+            result["action"] = "other"
+            result["message"] = f"Клетка {cell['name']}"
 
         return result
 
-    def _process_chance_card(self, player: Player, card: str):
-        """Обработать карточку Шанс"""
-        if "Старт" in card:
-            player.position = 0
-            player.add_money(200)
-        elif "тюрьму" in card.lower():
-            player.go_to_jail()
-        elif "Получите" in card:
-            amount = int(''.join(filter(str.isdigit, card)))
-            player.add_money(amount)
-        elif "Заплатите" in card:
-            amount = int(''.join(filter(str.isdigit, card)))
-            player.deduct_money(amount)
-            self.free_parking_pot += amount
+    def buy_property(self, player: SimplePlayer, position: int) -> bool:
+        """Купить собственность"""
+        cell = self.board.get_cell(position)
 
-    def _process_chest_card(self, player: Player, card: str):
-        """Обработать карточку Казна"""
-        if "Получите" in card:
-            amount = int(''.join(filter(str.isdigit, card)))
-            player.add_money(amount)
-        elif "Заплатите" in card:
-            amount = int(''.join(filter(str.isdigit, card)))
-            player.deduct_money(amount)
-            self.free_parking_pot += amount
-        elif "выпуск из тюрьмы" in card.lower():
-            player.get_out_of_jail_cards += 1
-
-    def buy_property(self, player: Player, property_id: int) -> bool:
-        """Купить недвижимость"""
-        cell = self.board.get_cell(property_id)
-
-        if not hasattr(cell, 'owner_id') or cell.owner_id is not None:
+        if cell['owner_id'] is not None:
             return False
 
-        if not player.can_afford(cell.price):
+        if player.money < 100:  # Простая цена
             return False
 
-        if player.deduct_money(cell.price):
-            cell.owner_id = player.user_id
-
-            if isinstance(cell, PropertyCell):
-                player.properties.append(property_id)
-            elif isinstance(cell, StationCell):
-                player.stations.append(property_id)
-            elif isinstance(cell, UtilityCell):
-                player.utilities.append(property_id)
-
-            return True
-
-        return False
-
-    def start_auction(self, property_id: int):
-        """Начать аукцион"""
-        self.auction = Auction(
-            property_id=property_id,
-            current_bid=0,
-            participants=list(self.players.keys()),
-            active=True
-        )
-        self.state = GameState.AUCTION
-
-    def place_bid(self, player_id: int, amount: int) -> bool:
-        """Сделать ставку на аукционе"""
-        if not self.auction or not self.auction.active:
-            return False
-
-        player = self.players.get(player_id)
-        if not player or player_id not in self.auction.participants:
-            return False
-
-        if amount <= self.auction.current_bid:
-            return False
-
-        if not player.can_afford(amount):
-            return False
-
-        self.auction.current_bid = amount
-        self.auction.current_bidder_id = player_id
+        player.deduct_money(100)
+        cell['owner_id'] = player.user_id
+        player.properties.append(position)
         return True
 
-    def end_auction(self):
-        """Завершить аукцион"""
-        if not self.auction:
-            return
+    def force_start(self) -> bool:
+        """Принудительный старт игры (для админов)"""
+        if len(self.players) < 1:  # Можно начать даже с одним игроком
+            return False
 
-        if self.auction.current_bidder_id:
-            winner = self.players.get(self.auction.current_bidder_id)
-            if winner and winner.deduct_money(self.auction.current_bid):
-                cell = self.board.get_cell(self.auction.property_id)
-                cell.owner_id = winner.user_id
-
-        self.auction = None
         self.state = GameState.IN_PROGRESS
+        self.player_order = list(self.players.keys())
+        random.shuffle(self.player_order)
+        self.current_player_index = 0
+        self.turn_count = 1
 
-    def create_trade_offer(self, from_player_id: int, to_player_id: int,
-                           offer: Dict, request: Dict) -> Optional[str]:
-        """Создать предложение торговли"""
-        if from_player_id not in self.players or to_player_id not in self.players:
-            return None
+        # Если только один игрок - автоматически ходит
+        if len(self.players) == 1:
+            player = self.get_current_player()
+            if player:
+                player.money = Config.START_MONEY
 
-        trade_id = f"{from_player_id}_{to_player_id}_{datetime.now().timestamp()}"
-
-        trade = TradeOffer(
-            from_player_id=from_player_id,
-            to_player_id=to_player_id,
-            offer_money=offer.get('money', 0),
-            offer_properties=offer.get('properties', []),
-            request_money=request.get('money', 0),
-            request_properties=request.get('properties', [])
-        )
-
-        self.trade_offers[trade_id] = trade
-        return trade_id
-
-    def accept_trade(self, trade_id: str) -> bool:
-        """Принять предложение торговли"""
-        trade = self.trade_offers.get(trade_id)
-        if not trade or trade.status != "pending":
-            return False
-
-        from_player = self.players.get(trade.from_player_id)
-        to_player = self.players.get(trade.to_player_id)
-
-        if not from_player or not to_player:
-            return False
-
-        # Проверить возможность торговли
-        if not from_player.can_afford(trade.offer_money):
-            return False
-        if not to_player.can_afford(trade.request_money):
-            return False
-
-        # Обмен деньгами
-        from_player.deduct_money(trade.offer_money)
-        to_player.add_money(trade.offer_money)
-
-        to_player.deduct_money(trade.request_money)
-        from_player.add_money(trade.request_money)
-
-        # Обмен недвижимостью
-        for prop_id in trade.offer_properties:
-            cell = self.board.get_cell(prop_id)
-            if hasattr(cell, 'owner_id') and cell.owner_id == from_player.user_id:
-                cell.owner_id = to_player.user_id
-                if prop_id in from_player.properties:
-                    from_player.properties.remove(prop_id)
-                    to_player.properties.append(prop_id)
-
-        for prop_id in trade.request_properties:
-            cell = self.board.get_cell(prop_id)
-            if hasattr(cell, 'owner_id') and cell.owner_id == to_player.user_id:
-                cell.owner_id = from_player.user_id
-                if prop_id in to_player.properties:
-                    to_player.properties.remove(prop_id)
-                    from_player.properties.append(prop_id)
-
-        trade.status = "accepted"
         return True
 
-    def build_house(self, player: Player, property_id: int) -> bool:
-        """Построить дом на недвижимости"""
-        if not self.board.can_build_on_property(property_id, player.user_id):
-            return False
+    def can_join(self) -> bool:
+        """Может ли игрок присоединиться сейчас"""
+        return self.state == GameState.LOBBY and len(self.players) < Config.MAX_PLAYERS
 
-        cell = self.board.get_cell(property_id)
-        if not isinstance(cell, PropertyCell):
-            return False
+    def is_player_in_game(self, user_id: int) -> bool:
+        """Проверить, находится ли игрок в игре"""
+        return user_id in self.players
 
-        if not player.can_afford(cell.house_price):
-            return False
-
-        if player.deduct_money(cell.house_price):
-            return cell.build_house()
-
-        return False
-
-    def declare_bankruptcy(self, player: Player, creditor_id: Optional[int] = None):
-        """Объявить банкротство"""
-        player.status = PlayerStatus.BANKRUPT
-
-        if creditor_id and creditor_id in self.players:
-            # Передать активы кредитору
-            creditor = self.players[creditor_id]
-
-            for prop_id in player.properties:
-                cell = self.board.get_cell(prop_id)
-                cell.owner_id = creditor_id
-                creditor.properties.append(prop_id)
-
-            for station_id in player.stations:
-                cell = self.board.get_cell(station_id)
-                cell.owner_id = creditor_id
-                creditor.stations.append(station_id)
-
-            for util_id in player.utilities:
-                cell = self.board.get_cell(util_id)
-                cell.owner_id = creditor_id
-                creditor.utilities.append(util_id)
+    def draw_card(self, deck_type: str) -> Dict:
+        """Вытянуть карточку"""
+        if deck_type == "chance":
+            deck = self.chance_deck
         else:
-            # Вернуть активы банку
-            for prop_id in player.properties:
-                cell = self.board.get_cell(prop_id)
-                cell.owner_id = None
-                cell.houses = 0
-                cell.hotel = False
+            deck = self.chest_deck
 
-            for station_id in player.stations:
-                cell = self.board.get_cell(station_id)
-                cell.owner_id = None
+        if not deck:
+            if deck_type == "chance":
+                deck = GameConfig.CHANCE_CARDS.copy()
+                random.shuffle(deck)
+                self.chance_deck = deck
+            else:
+                deck = GameConfig.CHEST_CARDS.copy()
+                random.shuffle(deck)
+                self.chest_deck = deck
 
-            for util_id in player.utilities:
-                cell = self.board.get_cell(util_id)
-                cell.owner_id = None
+        card = deck.pop(0)
+        return card
 
-        # Удалить игрока из порядка ходов
-        if player.user_id in self.player_order:
-            self.player_order.remove(player.user_id)
+    def apply_card_action(self, player: SimplePlayer, card: Dict) -> Dict[str, Any]:
+        """Применить действие карточки"""
+        result = {
+            "message": card.get("text", ""),
+            "applied": True
+        }
 
-        # Проверить конец игры
-        if len(self.player_order) == 1:
-            self.state = GameState.FINISHED
+        action = card.get("action")
+        value = card.get("value")
+
+        if action == "move_to":
+            if isinstance(value, int):
+                player.position = value
+                result["message"] += f"\n📍 Перемещены на клетку {value}"
+
+        elif action == "go_to_jail":
+            player.go_to_jail()
+            result["message"] += "\n🔒 Отправлены в тюрьму!"
+
+        elif action == "add_money":
+            if isinstance(value, int):
+                player.add_money(value)
+                result["message"] += f"\n💰 Получено ${value}"
+
+        elif action == "deduct_money":
+            if isinstance(value, int):
+                if player.deduct_money(value):
+                    self.free_parking_pot += value
+                    result["message"] += f"\n💸 Уплачено ${value}"
+                else:
+                    result["message"] += f"\n💥 Недостаточно денег!"
+                    result["applied"] = False
+
+        elif action == "get_out_of_jail":
+            player.get_out_of_jail_cards += 1
+            result["message"] += f"\n🎫 Получена карта освобождения!"
+
+        return result
+
+    def get_winner(self) -> Optional[SimplePlayer]:
+        """Получить победителя"""
+        active_players = [p for p in self.players.values() if not p.is_bankrupt()]
+
+        if len(active_players) == 1:
+            return active_players[0]
+
+        # Если несколько игроков, выбираем самого богатого
+        if active_players:
+            return max(active_players, key=lambda p: p.money)
+
+        return None
 
     def to_dict(self) -> Dict:
-        """Конвертировать игру в словарь для сохранения"""
-        return {
-            "game_id": self.game_id,
-            "creator_id": self.creator_id,
-            "created_at": self.created_at.isoformat(),
-            "state": self.state.value,
-            "players": {
-                uid: {
-                    "user_id": p.user_id,
-                    "username": p.username,
-                    "full_name": p.full_name,
-                    "position": p.position,
-                    "money": p.money,
-                    "status": p.status.value,
-                    "properties": p.properties,
-                    "stations": p.stations,
-                    "utilities": p.utilities,
-                    "jail_turns": p.jail_turns,
-                    "get_out_of_jail_cards": p.get_out_of_jail_cards,
-                    "color": p.color
-                }
-                for uid, p in self.players.items()
-            },
-            "player_order": self.player_order,
-            "current_player_index": self.current_player_index,
-            "board_state": [
-                {
-                    "id": i,
-                    "owner_id": cell.owner_id if hasattr(cell, 'owner_id') else None,
-                    "houses": cell.houses if hasattr(cell, 'houses') else 0,
-                    "hotel": cell.hotel if hasattr(cell, 'hotel') else False,
-                    "mortgaged": cell.mortgaged if hasattr(cell, 'mortgaged') else False
-                }
-                for i, cell in enumerate(self.board.cells)
-                if hasattr(cell, 'owner_id')
-            ],
-            "double_count": self.double_count,
-            "free_parking_pot": self.free_parking_pot,
-            "auction": {
-                "property_id": self.auction.property_id,
-                "current_bid": self.auction.current_bid,
-                "current_bidder_id": self.auction.current_bidder_id,
-                "participants": self.auction.participants,
-                "active": self.auction.active
-            } if self.auction else None
-        }
+        """Конвертировать в словарь для сохранения"""
+        print(f"🔍 DEBUG to_dict: Конвертирую игру {self.game_id}")
+
+        try:
+            result = {
+                "game_id": self.game_id,
+                "creator_id": self.creator_id,
+                "players": {},
+                "player_order": self.player_order,
+                "current_player_index": self.current_player_index,
+                "state": self.state.value,
+                "created_at": self.created_at.isoformat(),
+                "double_count": self.double_count,
+                "turn_count": self.turn_count,
+                "free_parking_pot": self.free_parking_pot
+            }
+
+            print(f"🔍 DEBUG: Добавляю {len(self.players)} игроков...")
+            for k, v in self.players.items():
+                result["players"][str(k)] = self._player_to_dict(v)
+
+            print(f"✅ DEBUG to_dict: Успешно")
+            return result
+
+        except Exception as e:
+            print(f"❌ ОШИБКА в to_dict: {e}")
+            raise
+
+    def _player_to_dict(self, player: SimplePlayer) -> Dict:
+        """Конвертировать игрока в словарь"""
+        try:
+            # Проверяем наличие всех атрибутов
+            player_data = {
+                "user_id": player.user_id,
+                "username": player.username if hasattr(player, 'username') else "",
+                "full_name": player.full_name if hasattr(player, 'full_name') else "",
+                "position": player.position if hasattr(player, 'position') else 0,
+                "money": player.money if hasattr(player, 'money') else 0,
+                "properties": player.properties if hasattr(player, 'properties') else [],
+                "stations": player.stations if hasattr(player, 'stations') else [],
+                "utilities": player.utilities if hasattr(player, 'utilities') else [],
+                "in_jail": player.in_jail if hasattr(player, 'in_jail') else False,
+                "jail_turns": player.jail_turns if hasattr(player, 'jail_turns') else 0,
+                "get_out_of_jail_cards": player.get_out_of_jail_cards if hasattr(player,
+                                                                                 'get_out_of_jail_cards') else 0,
+                "color": player.color if hasattr(player, 'color') else "",
+                "status": player.status.value if hasattr(player, 'status') else "active",
+                "double_count": player.double_count if hasattr(player, 'double_count') else 0
+            }
+            return player_data
+        except Exception as e:
+            print(f"❌ ОШИБКА в _player_to_dict для игрока {getattr(player, 'user_id', 'unknown')}: {e}")
+            raise
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'Game':
-        """Восстановить игру из словаря"""
+        """Создать игру из словаря"""
         game = cls(data["game_id"], data["creator_id"])
-        game.created_at = datetime.fromisoformat(data["created_at"])
-        game.state = GameState(data["state"])
 
-        # Восстановить игроков
         game.players = {}
-        for uid, p_data in data["players"].items():
-            uid = int(uid)
-            player = Player(
-                user_id=p_data["user_id"],
-                username=p_data["username"],
-                full_name=p_data["full_name"]
+        for user_id_str, player_data in data["players"].items():
+            user_id = int(user_id_str)
+            player = SimplePlayer(
+                player_data["user_id"],
+                player_data["username"],
+                player_data["full_name"]
             )
-            player.position = p_data["position"]
-            player.money = p_data["money"]
-            player.status = PlayerStatus(p_data["status"])
-            player.properties = p_data["properties"]
-            player.stations = p_data["stations"]
-            player.utilities = p_data["utilities"]
-            player.jail_turns = p_data["jail_turns"]
-            player.get_out_of_jail_cards = p_data["get_out_of_jail_cards"]
-            player.color = p_data["color"]
-            game.players[uid] = player
+            player.position = player_data.get("position", 0)
+            player.money = player_data.get("money", GameConfig.START_MONEY)
+            player.properties = player_data.get("properties", [])
+            player.stations = player_data.get("stations", [])
+            player.utilities = player_data.get("utilities", [])
+            player.in_jail = player_data.get("in_jail", False)
+            player.jail_turns = player_data.get("jail_turns", 0)
+            player.get_out_of_jail_cards = player_data.get("get_out_of_jail_cards", 0)
+            player.color = player_data.get("color", "🔴")
+            player.status = PlayerStatus(player_data.get("status", "active"))
+            player.double_count = player_data.get("double_count", 0)
 
-        game.player_order = data["player_order"]
-        game.current_player_index = data["current_player_index"]
+            game.players[user_id] = player
 
-        # Восстановить состояние поля
-        for cell_state in data["board_state"]:
-            cell = game.board.get_cell(cell_state["id"])
-            if hasattr(cell, 'owner_id'):
-                cell.owner_id = cell_state["owner_id"]
-            if hasattr(cell, 'houses'):
-                cell.houses = cell_state["houses"]
-            if hasattr(cell, 'hotel'):
-                cell.hotel = cell_state["hotel"]
-            if hasattr(cell, 'mortgaged'):
-                cell.mortgaged = cell_state["mortgaged"]
-
-        game.double_count = data["double_count"]
+        game.player_order = data.get("player_order", [])
+        game.current_player_index = data.get("current_player_index", 0)
+        game.state = GameState(data.get("state", "lobby"))
+        game.created_at = datetime.fromisoformat(data["created_at"])
+        game.double_count = data.get("double_count", 0)
+        game.turn_count = data.get("turn_count", 0)
         game.free_parking_pot = data.get("free_parking_pot", 0)
 
-        # Восстановить аукцион
-        if data.get("auction"):
-            game.auction = Auction(
-                property_id=data["auction"]["property_id"],
-                current_bid=data["auction"]["current_bid"],
-                current_bidder_id=data["auction"]["current_bidder_id"],
-                participants=data["auction"]["participants"],
-                active=data["auction"]["active"]
-            )
-            game.state = GameState.AUCTION
-
         return game
-
-

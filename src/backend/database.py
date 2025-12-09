@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 import os
 
-from .game import Game
+from game import Game
 
 
 class GameDatabase:
@@ -46,59 +46,102 @@ class GameDatabase:
         conn.close()
 
     def save_game(self, game: Game):
-        """Сохранить игру"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        """Сохранить игру - ОТЛАДОЧНАЯ ВЕРСИЯ"""
+        print(f"\n=== DEBUG SAVE_GAME START ===")
+        print(f"Game ID: {game.game_id}")
+        print(f"Game state: {game.state}")
+        print(f"Players count: {len(game.players)}")
 
-        game_data = json.dumps(game.to_dict())
+        try:
+            # 1. Пытаемся сериализовать
+            print(f"\n[1/4] Сериализация игры...")
+            game_data = json.dumps(game.to_dict())
+            print(f"✓ Сериализовано: {len(game_data)} байт")
 
-        # Проверить, существует ли уже игра
-        cursor.execute(
-            "SELECT COUNT(*) FROM games WHERE game_id = ?",
-            (game.game_id,)
-        )
-        exists = cursor.fetchone()[0] > 0
+            # 2. Подключаемся к БД
+            print(f"[2/4] Подключение к БД...")
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
 
-        if exists:
-            # Обновить существующую запись
-            cursor.execute('''
-                UPDATE games 
-                SET game_data = ?, updated_at = ?, is_active = ?
-                WHERE game_id = ?
-            ''', (
-                game_data,
-                datetime.now().isoformat(),
-                1 if game.state.value != "finished" else 0,
-                game.game_id
-            ))
-
-            # Удалить старых игроков
+            # 3. Проверяем существование
+            print(f"[3/4] Проверка существования игры...")
             cursor.execute(
-                "DELETE FROM game_players WHERE game_id = ?",
+                "SELECT COUNT(*) FROM games WHERE game_id = ?",
                 (game.game_id,)
             )
-        else:
-            # Вставить новую запись
-            cursor.execute('''
-                INSERT INTO games (game_id, creator_id, created_at, updated_at, game_data)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (
-                game.game_id,
-                game.creator_id,
-                game.created_at.isoformat(),
-                datetime.now().isoformat(),
-                game_data
-            ))
+            exists = cursor.fetchone()[0] > 0
+            print(f"Игра существует в БД: {exists}")
 
-        # Добавить игроков
-        for player_id in game.players.keys():
-            cursor.execute('''
-                INSERT INTO game_players (game_id, player_id)
-                VALUES (?, ?)
-            ''', (game.game_id, player_id))
+            if exists:
+                print(f"Обновление записи...")
+                cursor.execute('''
+                    UPDATE games 
+                    SET game_data = ?, updated_at = ?, is_active = ?
+                    WHERE game_id = ?
+                ''', (
+                    game_data,
+                    datetime.now().isoformat(),
+                    1 if game.state.value != "finished" else 0,
+                    game.game_id
+                ))
 
-        conn.commit()
-        conn.close()
+                cursor.execute(
+                    "DELETE FROM game_players WHERE game_id = ?",
+                    (game.game_id,)
+                )
+                print("✓ Запись обновлена")
+            else:
+                print(f"Создание новой записи...")
+                cursor.execute('''
+                    INSERT INTO games (game_id, creator_id, created_at, updated_at, game_data)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    game.game_id,
+                    game.creator_id,
+                    game.created_at.isoformat(),
+                    datetime.now().isoformat(),
+                    game_data
+                ))
+                print("✓ Запись создана")
+
+            # 4. Добавляем игроков
+            print(f"[4/4] Добавление игроков...")
+            player_ids = list(game.players.keys())
+            print(f"Игроки для добавления: {player_ids}")
+
+            for player_id in player_ids:
+                cursor.execute('''
+                    INSERT INTO game_players (game_id, player_id)
+                    VALUES (?, ?)
+                ''', (game.game_id, player_id))
+
+            print(f"✓ Добавлено {len(player_ids)} игроков")
+
+            # Коммит
+            print(f"Коммит изменений...")
+            conn.commit()
+            conn.close()
+
+            print(f"=== DEBUG SAVE_GAME END: УСПЕХ ===\n")
+
+        except Exception as e:
+            print(f"\n❌❌❌ ОШИБКА В SAVE_GAME:")
+            print(f"Тип ошибки: {type(e).__name__}")
+            print(f"Сообщение: {str(e)}")
+            print(f"\nДетали:")
+            import traceback
+            traceback.print_exc()
+
+            # Пробуем получить больше информации об ошибке сериализации
+            try:
+                test_dict = game.to_dict()
+                print(f"\nТест сериализации to_dict: Успех")
+                test_json = json.dumps(test_dict)
+                print(f"Тест json.dumps: Успех, {len(test_json)} байт")
+            except Exception as e2:
+                print(f"\nТест сериализации провален: {e2}")
+
+            raise  # Перебрасываем ошибку дальше
 
     def load_game(self, game_id: str) -> Optional[Game]:
         """Загрузить игру"""

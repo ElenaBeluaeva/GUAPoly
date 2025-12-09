@@ -201,3 +201,13 @@ def get_game_management_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⏭️ Завершить ход", callback_data="game_end_turn")]
     ]
     return InlineKeyboardMarkup(keyboard)
+def get_manage_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура управления"""
+    keyboard = [
+        [InlineKeyboardButton("🏗️ Управление домами", callback_data="manage_houses")],
+        [InlineKeyboardButton("💳 Заложить собственность", callback_data="manage_mortgage")],
+        [InlineKeyboardButton("🏦 Снять залог", callback_data="manage_unmortgage")],
+        [InlineKeyboardButton("📊 Статистика", callback_data="manage_stats")],
+        [InlineKeyboardButton("🔙 Назад к игре", callback_data="back_game_actions")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
