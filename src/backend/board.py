@@ -157,55 +157,244 @@ class Board:
         self.cells = [
             BoardCell(0, "Старт", CellType.GO, "Получите 200$ при прохождении"),
 
-            PropertyCell(1, "Старая дорога", "brown", 60, 50, 50, [2, 10, 30, 90, 160, 250]),
+            # Коричневые улицы
+            PropertyCell(
+                id=1,
+                name="Старая дорога",
+                type=CellType.PROPERTY,
+                color_group="brown",
+                price=60,
+                house_price=50,
+                rent=[2, 10, 30, 90, 160, 250]
+            ),
             BoardCell(2, "Казна", CellType.CHEST),
-            PropertyCell(3, "Белый переулок", "brown", 60, 50, 50, [4, 20, 60, 180, 320, 450]),
+            PropertyCell(
+                id=3,
+                name="Белый переулок",
+                type=CellType.PROPERTY,
+                color_group="brown",
+                price=60,
+                house_price=50,
+                rent=[4, 20, 60, 180, 320, 450]
+            ),
             BoardCell(4, "Подоходный налог", CellType.TAX, "Заплатите 200$", 200),
-            StationCell(5, "Курский вокзал"),
 
-            PropertyCell(6, "Сенная площадь", "light_blue", 100, 50, 50, [6, 30, 90, 270, 400, 550]),
+            # Вокзал
+            StationCell(id=5, name="Курский вокзал", type=CellType.STATION),
+
+            # Голубые улицы
+            PropertyCell(
+                id=6,
+                name="Сенная площадь",
+                type=CellType.PROPERTY,
+                color_group="light_blue",
+                price=100,
+                house_price=50,
+                rent=[6, 30, 90, 270, 400, 550]
+            ),
             BoardCell(7, "Шанс", CellType.CHANCE),
-            PropertyCell(8, "Пушкинская улица", "light_blue", 100, 50, 50, [6, 30, 90, 270, 400, 550]),
-            PropertyCell(9, "Гоголевский бульвар", "light_blue", 120, 50, 50, [8, 40, 100, 300, 450, 600]),
+            PropertyCell(
+                id=8,
+                name="Пушкинская улица",
+                type=CellType.PROPERTY,
+                color_group="light_blue",
+                price=100,
+                house_price=50,
+                rent=[6, 30, 90, 270, 400, 550]
+            ),
+            PropertyCell(
+                id=9,
+                name="Гоголевский бульвар",
+                type=CellType.PROPERTY,
+                color_group="light_blue",
+                price=120,
+                house_price=50,
+                rent=[8, 40, 100, 300, 450, 600]
+            ),
 
+            # Тюрьма
             BoardCell(10, "Тюрьма", CellType.JAIL, "Просто посещение"),
 
-            PropertyCell(11, "Смоленский рынок", "pink", 140, 100, 100, [10, 50, 150, 450, 625, 750]),
-            UtilityCell(12, "Электростанция"),
-            PropertyCell(13, "Манежная площадь", "pink", 140, 100, 100, [10, 50, 150, 450, 625, 750]),
-            PropertyCell(14, "Тверская улица", "pink", 160, 100, 100, [12, 60, 180, 500, 700, 900]),
-            StationCell(15, "Белорусский вокзал"),
+            # Розовые улицы
+            PropertyCell(
+                id=11,
+                name="Смоленский рынок",
+                type=CellType.PROPERTY,
+                color_group="pink",
+                price=140,
+                house_price=100,
+                rent=[10, 50, 150, 450, 625, 750]
+            ),
+            UtilityCell(id=12, name="Электростанция", type=CellType.UTILITY),
+            PropertyCell(
+                id=13,
+                name="Манежная площадь",
+                type=CellType.PROPERTY,
+                color_group="pink",
+                price=140,
+                house_price=100,
+                rent=[10, 50, 150, 450, 625, 750]
+            ),
+            PropertyCell(
+                id=14,
+                name="Тверская улица",
+                type=CellType.PROPERTY,
+                color_group="pink",
+                price=160,
+                house_price=100,
+                rent=[12, 60, 180, 500, 700, 900]
+            ),
+            StationCell(id=15, name="Белорусский вокзал", type=CellType.STATION),
 
-            PropertyCell(16, "Патриаршие пруды", "orange", 180, 100, 100, [14, 70, 200, 550, 750, 950]),
+            # Оранжевые улицы
+            PropertyCell(
+                id=16,
+                name="Патриаршие пруды",
+                type=CellType.PROPERTY,
+                color_group="orange",
+                price=180,
+                house_price=100,
+                rent=[14, 70, 200, 550, 750, 950]
+            ),
             BoardCell(17, "Казна", CellType.CHEST),
-            PropertyCell(18, "Столешников переулок", "orange", 180, 100, 100, [14, 70, 200, 550, 750, 950]),
-            PropertyCell(19, "Кузнецкий мост", "orange", 200, 100, 100, [16, 80, 220, 600, 800, 1000]),
+            PropertyCell(
+                id=18,
+                name="Столешников переулок",
+                type=CellType.PROPERTY,
+                color_group="orange",
+                price=180,
+                house_price=100,
+                rent=[14, 70, 200, 550, 750, 950]
+            ),
+            PropertyCell(
+                id=19,
+                name="Кузнецкий мост",
+                type=CellType.PROPERTY,
+                color_group="orange",
+                price=200,
+                house_price=100,
+                rent=[16, 80, 220, 600, 800, 1000]
+            ),
 
+            # Бесплатная стоянка
             BoardCell(20, "Бесплатная стоянка", CellType.FREE_PARKING),
 
-            PropertyCell(21, "Улица Кирова", "red", 220, 150, 150, [18, 90, 250, 700, 875, 1050]),
+            # Красные улицы
+            PropertyCell(
+                id=21,
+                name="Улица Кирова",
+                type=CellType.PROPERTY,
+                color_group="red",
+                price=220,
+                house_price=150,
+                rent=[18, 90, 250, 700, 875, 1050]
+            ),
             BoardCell(22, "Шанс", CellType.CHANCE),
-            PropertyCell(23, "Театральный проезд", "red", 220, 150, 150, [18, 90, 250, 700, 875, 1050]),
-            PropertyCell(24, "Лубянская площадь", "red", 240, 150, 150, [20, 100, 300, 750, 925, 1100]),
-            StationCell(25, "Казанский вокзал"),
+            PropertyCell(
+                id=23,
+                name="Театральный проезд",
+                type=CellType.PROPERTY,
+                color_group="red",
+                price=220,
+                house_price=150,
+                rent=[18, 90, 250, 700, 875, 1050]
+            ),
+            PropertyCell(
+                id=24,
+                name="Лубянская площадь",
+                type=CellType.PROPERTY,
+                color_group="red",
+                price=240,
+                house_price=150,
+                rent=[20, 100, 300, 750, 925, 1100]
+            ),
+            StationCell(id=25, name="Казанский вокзал", type=CellType.STATION),
 
-            PropertyCell(26, "Комсомольская площадь", "yellow", 260, 150, 150, [22, 110, 330, 800, 975, 1150]),
-            PropertyCell(27, "Сретенский бульвар", "yellow", 260, 150, 150, [22, 110, 330, 800, 975, 1150]),
-            UtilityCell(28, "Водопровод"),
-            PropertyCell(29, "Рождественка", "yellow", 280, 150, 150, [24, 120, 360, 850, 1025, 1200]),
+            # Желтые улицы
+            PropertyCell(
+                id=26,
+                name="Комсомольская площадь",
+                type=CellType.PROPERTY,
+                color_group="yellow",
+                price=260,
+                house_price=150,
+                rent=[22, 110, 330, 800, 975, 1150]
+            ),
+            PropertyCell(
+                id=27,
+                name="Сретенский бульвар",
+                type=CellType.PROPERTY,
+                color_group="yellow",
+                price=260,
+                house_price=150,
+                rent=[22, 110, 330, 800, 975, 1150]
+            ),
+            UtilityCell(id=28, name="Водопровод", type=CellType.UTILITY),
+            PropertyCell(
+                id=29,
+                name="Рождественка",
+                type=CellType.PROPERTY,
+                color_group="yellow",
+                price=280,
+                house_price=150,
+                rent=[24, 120, 360, 850, 1025, 1200]
+            ),
 
+            # Отправка в тюрьму
             BoardCell(30, "Отправляйтесь в тюрьму", CellType.GO_TO_JAIL),
 
-            PropertyCell(31, "Проспект Маркса", "green", 300, 200, 200, [26, 130, 390, 900, 1100, 1275]),
-            PropertyCell(32, "Улица Горького", "green", 300, 200, 200, [26, 130, 390, 900, 1100, 1275]),
+            # Зеленые улицы
+            PropertyCell(
+                id=31,
+                name="Проспект Маркса",
+                type=CellType.PROPERTY,
+                color_group="green",
+                price=300,
+                house_price=200,
+                rent=[26, 130, 390, 900, 1100, 1275]
+            ),
+            PropertyCell(
+                id=32,
+                name="Улица Горького",
+                type=CellType.PROPERTY,
+                color_group="green",
+                price=300,
+                house_price=200,
+                rent=[26, 130, 390, 900, 1100, 1275]
+            ),
             BoardCell(33, "Казна", CellType.CHEST),
-            PropertyCell(34, "Маяковская площадь", "green", 320, 200, 200, [28, 150, 450, 1000, 1200, 1400]),
-            StationCell(35, "Киевский вокзал"),
+            PropertyCell(
+                id=34,
+                name="Маяковская площадь",
+                type=CellType.PROPERTY,
+                color_group="green",
+                price=320,
+                house_price=200,
+                rent=[28, 150, 450, 1000, 1200, 1400]
+            ),
+            StationCell(id=35, name="Киевский вокзал", type=CellType.STATION),
 
+            # Темно-синие улицы
             BoardCell(36, "Шанс", CellType.CHANCE),
-            PropertyCell(37, "Арбат", "dark_blue", 350, 200, 200, [35, 175, 500, 1100, 1300, 1500]),
+            PropertyCell(
+                id=37,
+                name="Арбат",
+                type=CellType.PROPERTY,
+                color_group="dark_blue",
+                price=350,
+                house_price=200,
+                rent=[35, 175, 500, 1100, 1300, 1500]
+            ),
             BoardCell(38, "Налог на роскошь", CellType.TAX, "Заплатите 100$", 100),
-            PropertyCell(39, "Грузинский вал", "dark_blue", 400, 200, 200, [50, 200, 600, 1400, 1700, 2000])
+            PropertyCell(
+                id=39,
+                name="Грузинский вал",
+                type=CellType.PROPERTY,
+                color_group="dark_blue",
+                price=400,
+                house_price=200,
+                rent=[50, 200, 600, 1400, 1700, 2000]
+            )
         ]
 
     def get_cell(self, position: int) -> BoardCell:
@@ -282,7 +471,8 @@ class Board:
         elif isinstance(cell, UtilityCell):
             player.utilities.append(position)
 
-        player.increment_properties_bought()
+        if hasattr(player, 'increment_properties_bought'):
+            player.increment_properties_bought()
         return True
 
     def mortgage_property(self, position: int) -> bool:
