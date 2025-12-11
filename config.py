@@ -15,7 +15,7 @@ class Config:
     MAX_PLAYERS = 8
     BOARD_SIZE = 40
     SALARY = 200
-    JAIL_FINE = 50
+    JAIL_FINE = 200
 
     # Путь к базе данных
     DB_PATH = "data/games.db"

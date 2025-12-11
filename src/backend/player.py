@@ -73,9 +73,10 @@ class Player:
         self.jail_turns = 0
 
     def release_from_jail(self):
-        """Освободить из тюрьмы"""
-        self.status = PlayerStatus.ACTIVE
+        self.in_jail = False
         self.jail_turns = 0
+        self.jail_attempts = 0
+        self.status = PlayerStatus.ACTIVE
 
     def is_bankrupt(self) -> bool:
         """Проверить банкротство"""

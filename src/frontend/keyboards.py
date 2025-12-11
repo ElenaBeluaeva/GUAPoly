@@ -53,7 +53,7 @@ def get_lobby_keyboard(is_creator: bool = False, game_id: str = "") -> InlineKey
     keyboard = []
 
     if is_creator:
-        keyboard.append([InlineKeyboardButton("🚀 Начать игру", callback_data="lobby_start_game")])
+        keyboard.append([InlineKeyboardButton("🚀 Начать игру", callback_data=f"lobby_start_{game_id}")])
 
     keyboard.extend([
         [InlineKeyboardButton("👥 Пригласить друзей", callback_data=f"lobby_invite_{game_id}")],
@@ -64,15 +64,21 @@ def get_lobby_keyboard(is_creator: bool = False, game_id: str = "") -> InlineKey
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_game_actions_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура игровых действий (День 2)"""
-    keyboard = [
-        [InlineKeyboardButton("🎲 Бросить кубики", callback_data="game_roll_dice")],
-        [InlineKeyboardButton("🗺️ Посмотреть поле", callback_data="game_view_board")],
-        [InlineKeyboardButton("🏠 Мои свойства", callback_data="game_my_properties")],
-        [InlineKeyboardButton("🔙 Выйти из игры", callback_data="back_main_menu")]
-    ]
+def get_lobby_keyboard(is_creator: bool = False, game_id: str = "") -> InlineKeyboardMarkup:
+    """Клавиатура лобби (День 2)"""
+    keyboard = []
+
+    if is_creator:
+        keyboard.append([InlineKeyboardButton("🚀 Начать игру", callback_data=f"lobby_start_{game_id}")])  # ← ИСПРАВЛЕНО
+
+    keyboard.extend([
+        [InlineKeyboardButton("👥 Пригласить друзей", callback_data=f"lobby_invite_{game_id}")],
+        [InlineKeyboardButton("📊 Статистика лобби", callback_data=f"lobby_stats_{game_id}")],  # ← Добавили game_id
+        [InlineKeyboardButton("❌ Покинуть лобби", callback_data="lobby_leave")]
+    ])
+
     return InlineKeyboardMarkup(keyboard)
+
 
 
 def get_board_view_keyboard() -> InlineKeyboardMarkup:
@@ -99,14 +105,14 @@ def get_properties_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_property_decision_keyboard(property_name: str, price: int) -> InlineKeyboardMarkup:
+def get_property_decision_keyboard(property_id: int, property_name: str, price: int) -> InlineKeyboardMarkup:
     """Клавиатура для решения о покупке недвижимости (День 4)"""
     keyboard = [
         [
-            InlineKeyboardButton(f"✅ Купить за ${price}", callback_data="property_confirm_buy"),
-            InlineKeyboardButton("❌ Отказаться", callback_data="property_decline")
+            InlineKeyboardButton(f"✅ Купить за ${price}", callback_data=f"property_buy_{property_id}"),
+            InlineKeyboardButton("❌ Отказаться", callback_data=f"property_skip_{property_id}")  # ← ИСПРАВЛЕНО
         ],
-        [InlineKeyboardButton("🎰 Начать аукцион", callback_data="property_auction")],
+        [InlineKeyboardButton("🎰 Начать аукцион", callback_data=f"property_auction_{property_id}")],  # ← Добавили property_id
         [InlineKeyboardButton("🔙 Назад", callback_data="back_game_actions")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -170,15 +176,19 @@ def get_trade_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_jail_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура в тюрьме (День 4)"""
-    keyboard = [
-        [InlineKeyboardButton("🎲 Попытаться выбросить дубль", callback_data="jail_roll")],
-        [InlineKeyboardButton("💵 Заплатить $50", callback_data="jail_pay")],
-        [InlineKeyboardButton("🎫 Использовать карту", callback_data="jail_card")],
-        [InlineKeyboardButton("⏳ Остаться в тюрьме", callback_data="jail_stay")]
-    ]
+def get_jail_keyboard(has_card: bool = False) -> InlineKeyboardMarkup:
+    """Клавиатура в тюрьме"""
+    keyboard = []
+
+    if has_card:
+        keyboard.append([InlineKeyboardButton("🎫 Использовать карту освобождения", callback_data="jail_card")])
+
+    keyboard.append([InlineKeyboardButton("💵 Заплатить $200", callback_data="jail_pay")])
+    keyboard.append([InlineKeyboardButton("🎲 Попытаться выбросить дубль", callback_data="jail_roll")])
+    keyboard.append([InlineKeyboardButton("⏳ Пропустить попытку", callback_data="jail_skip")])  # <-- ВЕРНУТЬ
+
     return InlineKeyboardMarkup(keyboard)
+
 
 
 def get_card_actions_keyboard(card_type: str) -> InlineKeyboardMarkup:
@@ -209,5 +219,15 @@ def get_manage_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🏦 Снять залог", callback_data="manage_unmortgage")],
         [InlineKeyboardButton("📊 Статистика", callback_data="manage_stats")],
         [InlineKeyboardButton("🔙 Назад к игре", callback_data="back_game_actions")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_game_actions_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура игровых действий (День 2)"""
+    keyboard = [
+        [InlineKeyboardButton("🎲 Бросить кубики", callback_data="game_roll_dice")],
+        [InlineKeyboardButton("🗺 Посмотреть поле", callback_data="game_view_board")],
+        [InlineKeyboardButton("🏠 Мои свойства", callback_data="game_my_properties")],
+        [InlineKeyboardButton("🔙 Выйти из игры", callback_data="back_main_menu")]
     ]
     return InlineKeyboardMarkup(keyboard)

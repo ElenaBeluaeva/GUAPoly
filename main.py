@@ -9,6 +9,9 @@ import random
 from datetime import datetime
 # Для таймера очистки предложений
 import asyncio
+import io
+from PIL import Image
+from src.frontend.graphics import board_renderer
 
 # При запуске бота добавьте задачу
 # application.job_queue.run_repeating(clear_buy_offer, interval=30, first=10)
@@ -30,6 +33,12 @@ from src.backend.game import Game, GameState
 from src.backend.player import Player, PlayerStatus
 from src.backend.board import Board, PropertyCell, StationCell, UtilityCell, CellType
 from src.backend.game_manager import GameManager
+from src.frontend.combined_graphics import create_game_message_with_board, get_combined_board_bytes
+
+# удалить потом
+import telegram
+from telegram import Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
 
 # Настройка логирования
 logging.basicConfig(
@@ -41,6 +50,20 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+
+
+# Добавьте обработчик ошибок
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Ошибка при обработке обновления: {context.error}")
+
+    if isinstance(context.error, telegram.error.TimedOut):
+        # Если таймаут - пытаемся отправить простое текстовое сообщение
+        try:
+            await update.message.reply_text("⏳ Запрос занял слишком много времени. Попробуйте еще раз.")
+        except:
+            pass
 
 # Инициализация
 game_manager = GameManager()
@@ -60,7 +83,12 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
-
+def mention_player(user_id: int, username: str, full_name: str) -> str:
+    """Форматирует упоминание игрока"""
+    if username:
+        return f"@{username}"
+    else:
+        return f"[{full_name}](tg://user?id={user_id})"
 # ========== КЛАВИАТУРЫ ==========
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -361,168 +389,353 @@ async def force_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик /roll с полной обработкой клеток"""
+    """Обработчик /roll с интерактивными кнопками"""
     try:
         print(f"\n=== ROLL COMMAND STARTED ===")
         user = update.effective_user
-        print(f"User ID: {user.id}, Name: {user.full_name}")
 
         game = game_manager.get_player_game(user.id)
 
         if not game:
-            print("❌ ERROR: Game not found")
             await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
             return
 
-        print(f"✅ Game found: {game.game_id}")
-
-        # ОТЛАДОЧНАЯ ИНФОРМАЦИЯ
-        print(f"🔍 Game state type: {type(game.state)}")
-        print(f"🔍 Game state value: {game.state}")
-        print(f"🔍 GameState.IN_PROGRESS: {GameState.IN_PROGRESS}")
-        print(f"🔍 Are they equal? {game.state == GameState.IN_PROGRESS}")
-
-        # Вместо if game.state != GameState.IN_PROGRESS:
         if game.state.value != "in_game":
-            print(f"❌ ERROR: Game not in progress. State: {game.state}, Value: {game.state.value}")
             await update.message.reply_text("❌ *Игра еще не началась!*", parse_mode="Markdown")
             return
 
-        print("✅ Game is in progress")
-
         current_player = game.get_current_player()
         if not current_player:
-            print("❌ ERROR: No current player")
-            await update.message.reply_text("❌ *Нет текущего игрока!*", parse_mode="Markdown")
+            await update.message.reply_text("❌ *Ошибка: текущий игрок не найден!*", parse_mode="Markdown")
             return
 
+        # Проверяем, чей сейчас ход
         if current_player.user_id != user.id:
-            print(f"❌ ERROR: Not player's turn")
+            mention = mention_player(
+                current_player.user_id,
+                current_player.username,
+                current_player.full_name
+            )
             await update.message.reply_text(
-                f"❌ *Сейчас не ваш ход!*\nХодит: {escape_markdown(current_player.full_name)}",
+                f"❌ *Сейчас не ваш ход!*\n\n🎯 Сейчас ходит: {mention}\n⏳ Ожидайте своей очереди",
                 parse_mode="Markdown"
             )
             return
 
-        print("✅ It's player's turn")
+        # Проверка тюрьмы
+        if current_player.in_jail:
+            jail_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎲 Попытаться выбросить дубль", callback_data=f"jail_roll_{game.game_id}")],
+                [InlineKeyboardButton("💵 Заплатить $200", callback_data=f"jail_pay_{game.game_id}")],
+                [InlineKeyboardButton("🎫 Использовать карту", callback_data=f"jail_card_{game.game_id}")],
+                [InlineKeyboardButton("⏳ Пропустить ход", callback_data=f"jail_skip_{game.game_id}")]
+            ])
+
+            await update.message.reply_text(
+                f"🔒 *Вы в тюрьме!*\n\nХод в тюрьме: {current_player.jail_turns + 1}/3\n\nВыберите действие:",
+                parse_mode="Markdown",
+                reply_markup=jail_keyboard
+            )
+            return
 
         # Бросок кубиков
         dice1, dice2, total = game.roll_dice()
-        print(f"🎲 Dice roll: {dice1} + {dice2} = {total}")
+
+        # Обработка дублей для тюрьмы
+        if dice1 == dice2:
+            game.double_count += 1
+            if game.double_count >= 3:
+                await update.message.reply_text(
+                    f"🎲 *Выброшен третий дубль!*\n🎯 {dice1} + {dice2} = {total}\n\n🔒 Вы отправляетесь в тюрьму!",
+                    parse_mode="Markdown"
+                )
+                current_player.go_to_jail()
+                game.next_turn()
+                game_manager.save_game_state(game.game_id)
+                await notify_next_player(game, context, current_player.user_id)
+                return
+        else:
+            game.double_count = 0
 
         # Перемещаем игрока
         old_position = current_player.position
         move_result = game.move_player(current_player, total)
-        print(f"📍 Move result: {move_result}")
 
-        # Получаем клетку и обрабатываем действие
+        # Получаем клетку
         cell = game.board.get_cell(current_player.position)
         cell_action = game.process_cell_action(current_player, total)
 
-        # Формируем начальный ответ
-        response = f"{current_player.color if hasattr(current_player, 'color') else '🎲'} "
-        response += f"*{escape_markdown(current_player.full_name)} бросает кубики:*\n"
-        response += f"🎯 {dice1} + {dice2} = *{total}*\n\n"
+        # Обработка отправки в тюрьму
+        if cell_action.get("action") == "go_to_jail":
+            current_player.position = 10
+            current_player.in_jail = True
+            current_player.jail_turns = 0
 
+            # Безопасно формируем jail_response
+            player_name = escape_markdown(current_player.full_name)
+            jail_response = f"🎲 *{player_name} бросает кубики:*\n"
+            jail_response += f"🎯 {dice1} + {dice2} = *{total}*\n\n"
+
+            if move_result.get("passed_start"):
+                jail_response += f"💰 *Прошли СТАРТ!* +${Config.SALARY}\n\n"
+
+            jail_response += f"📍 *Перемещение:* {old_position} → {current_player.position}\n"
+            jail_response += f"💰 *Баланс:* ${current_player.money}\n\n"
+
+            cell_name = escape_markdown(cell.name) if cell else "Неизвестно"
+            jail_response += f"🏠 *Клетка {current_player.position}: {cell_name}*\n"
+            jail_response += f"\n🔒 *ВЫ ОТПРАВЛЕНЫ В ТЮРЬМУ!*\n"
+            jail_response += f"📍 Позиция: Тюрьма (клетка 10)\n"
+            jail_response += f"📅 Круг: 1/3\n\n"
+            jail_response += f"🎮 В следующий ваш ход используйте:\n"
+            jail_response += f"• `/jail` - меню тюрьмы\n"
+            jail_response += f"• `/jail_pay` - заплатить ${Config.JAIL_FINE}\n"
+            jail_response += f"• `/jail_roll` - попытать удачу\n"
+            jail_response += f"• `/jail_card` - использовать карту\n\n"
+
+            # Передаем ход
+            game.next_turn()
+            next_player = game.get_current_player()
+            if next_player:
+                next_name = escape_markdown(next_player.full_name)
+                jail_response += f"⏭️ *Следующий ход:* {next_player.color if hasattr(next_player, 'color') else '🎲'} {next_name}"
+
+            await update.message.reply_text(jail_response, parse_mode="Markdown")
+            game_manager.save_game_state(game.game_id)
+            return
+
+        # Формируем текстовое сообщение (БЕЗОПАСНО)
+        response_lines = []
+
+        # 1. Первая строка: имя игрока
+        player_name = escape_markdown(current_player.full_name)
+        player_icon = current_player.color if hasattr(current_player, 'color') else '🎲'
+        response_lines.append(f"{player_icon} *{player_name} бросает кубики:*")
+
+        # 2. Результат броска
+        response_lines.append(f"🎯 {dice1} + {dice2} = *{total}*")
+        response_lines.append("")
+
+        # 3. Прошли старт
         if move_result.get("passed_start"):
-            response += f"💰 *Прошли СТАРТ!* +${Config.SALARY}\n\n"
+            response_lines.append(f"💰 *Прошли СТАРТ!* +${Config.SALARY}")
+            response_lines.append("")
 
-        response += f"📍 *Перемещение:* {old_position} → {current_player.position}\n"
-        response += f"💰 *Баланс:* ${current_player.money}\n\n"
+        # 4. Перемещение и баланс
+        response_lines.append(f"📍 *Перемещение:* {old_position} → {current_player.position}")
+        response_lines.append(f"💰 *Баланс:* ${current_player.money}")
+        response_lines.append("")
 
-        # Отображаем информацию о клетке
-        response += f"🏠 *Клетка {current_player.position}: {cell.name}*\n"
+        # 5. Информация о клетке
+        cell_name = escape_markdown(cell.name) if cell else "Неизвестно"
+        response_lines.append(f"🏠 *Клетка {current_player.position}: {cell_name}*")
 
-        # Проверяем, нужно ли обрабатывать ренту/налоги/карточки
-        should_apply_action = True
+        # Подготавливаем данные для отображения
+        players_data = []
+        properties_data = {}
 
-        # Если клетка - собственность и свободна, предлагаем купить
+        for player_id, player in game.players.items():
+            players_data.append({
+                "id": player_id,
+                "name": player.full_name,
+                "position": player.position,
+                "color": getattr(player, 'color', '🔴'),
+                "money": player.money
+            })
+
+        for board_cell in game.board.cells:
+            if hasattr(board_cell, 'owner_id') and board_cell.owner_id:
+                properties_data[board_cell.id] = {
+                    "owner": board_cell.owner_id,
+                    "houses": getattr(board_cell, 'houses', 0),
+                    "hotel": getattr(board_cell, 'hotel', False)
+                }
+
+        game_data = {
+            "players": players_data,
+            "properties": properties_data
+        }
+
+        # Создаем клавиатуру
+        keyboard = None
+
+        # Проверяем действия на клетке
         if cell_action["action"] == "buy_property":
-            should_apply_action = False
+            # Кнопки для покупки
             price = cell.price if hasattr(cell, 'price') else 0
+            response_lines.append("")
+            response_lines.append(f"🏷 *Эта собственность свободна!*")
+            response_lines.append(f"💵 Цена: ${price}")
 
-            # Сохраняем предложение покупки
-            context.user_data['buy_offer'] = {
+            # Сохраняем информацию о покупке в user_data
+            context.user_data[f'buy_offer_{game.game_id}_{current_player.position}'] = {
                 'game_id': game.game_id,
                 'position': current_player.position,
-                'price': price,
-                'cell_name': cell.name,
                 'player_id': user.id,
-                'dice1': dice1,
-                'dice2': dice2,
+                'price': price,
                 'double': (dice1 == dice2),
-                'cell_type': cell.type.value,
-                'timestamp': datetime.now().timestamp()
+                'timestamp': datetime.now()
             }
-            context.user_data['buy_timer'] = True
 
-            response += f"\n🏠 *СОБСТВЕННОСТЬ СВОБОДНА!*\n"
-            response += f"🏷 *{cell.name}*\n"
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"✅ Купить за ${price}",
+                                      callback_data=f"buy_{game.game_id}_{current_player.position}"),
+                 InlineKeyboardButton("❌ Пропустить",
+                                      callback_data=f"skip_{game.game_id}_{current_player.position}")],
+                [InlineKeyboardButton("🎰 Начать аукцион",
+                                      callback_data=f"auction_{game.game_id}_{current_player.position}")]
+            ])
 
-            if cell.type == CellType.PROPERTY:
-                response += f"🎨 Тип: Улица"
-                if hasattr(cell, 'color_group'):
-                    response += f" (Цвет: {cell.color_group})\n"
-            elif cell.type == CellType.STATION:
-                response += f"🚂 Тип: Вокзал\n"
-            elif cell.type == CellType.UTILITY:
-                response += f"⚡ Тип: Предприятие\n"
+        elif cell_action["action"] == "pay_rent":
+            rent = cell_action.get("rent", 0)
+            owner_id = cell_action.get("owner_id")
+            owner = game.players.get(owner_id) if owner_id else None
 
-            response += f"💵 Цена покупки: *${price}*\n"
-            response += f"💰 У вас: *${current_player.money}*\n\n"
-            response += f"📋 *Что делать:*\n"
-            response += f"• `/buy` - купить сейчас\n"
-            response += f"• `/skip` - пропустить покупку\n\n"
-            response += f"⏰ У вас 30 секунд на выбор!"
-        # В roll_command, при попадании на клетку "Отправляйтесь в тюрьму":
+            if owner:
+                response_lines.append("")
+                response_lines.append(f"💸 *Чужая собственность!*")
+                owner_name = escape_markdown(owner.full_name)
+                response_lines.append(f"👤 Владелец: {owner_name}")
+                response_lines.append(f"💰 Рента: ${rent}")
+
+                # Автоматически списываем ренту
+                if current_player.deduct_money(rent):
+                    owner.add_money(rent)
+                    response_lines.append(f"✅ Рента уплачена")
+                else:
+                    response_lines.append(f"❌ Недостаточно средств!")
+                    current_player.status = "bankrupt"
+
+            # После оплаты ренты сразу передаем ход
+            if dice1 != dice2:
+                game.next_turn()
+
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
+            ])
+
+        elif cell_action["action"] == "pay_tax":
+            tax = cell_action.get("amount", 0)
+            response_lines.append("")
+            response_lines.append(f"💸 *Налог:* ${tax}")
+
+            if current_player.deduct_money(tax):
+                game.free_parking_pot += tax
+                response_lines.append(f"✅ Налог уплачен")
+            else:
+                response_lines.append(f"❌ Недостаточно средств!")
+
+            # После уплаты налога сразу передаем ход
+            if dice1 != dice2:
+                game.next_turn()
+
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
+            ])
+
         elif cell_action["action"] == "go_to_jail":
             current_player.go_to_jail()
-            response += f"\n🔒 *Отправлены в тюрьму!*\n"
-            response += f"📍 Позиция: 10 (ТЮРЬМА)\n"
-            response += f"💡 Используйте /jail для выхода"
-        # Применяем другие действия клеток
-        elif should_apply_action:
-            action_result = game.apply_cell_action(current_player, cell_action, total)
-            if action_result.get("message"):
-                response += f"\n📋 *Действие:* {action_result['message']}\n"
+            response_lines.append("")
+            response_lines.append(f"🔒 *Отправлены в тюрьму!*")
 
-            # Если действие не покупка, обрабатываем дубль и переход хода
-            if dice1 == dice2:
-                response += "\n\n🎲 *Дубль! Ходите еще раз!*"
-                print("🎲 Double! Player gets another turn")
+            # Переход хода
+            game.next_turn()
+            await notify_next_player(game, context, current_player.user_id)
+
+        elif cell_action["action"] == "free_parking":
+            response_lines.append("")
+            if game.free_parking_pot > 0:
+                amount = game.free_parking_pot
+                current_player.add_money(amount)
+                game.free_parking_pot = 0
+                response_lines.append(f"🎉 *Бесплатная стоянка!*")
+                response_lines.append(f"💰 Вы получаете: ${amount}")
             else:
-                # Передаем ход
+                response_lines.append(f"🅿️ *Бесплатная стоянка*")
+                response_lines.append(f"💰 В банке: $0")
+
+            # После бесплатной стоянки сразу передаем ход
+            if dice1 != dice2:
                 game.next_turn()
-                next_player = game.get_current_player()
 
-                if next_player:
-                    response += f"\n\n⏭️ *Следующий ход:* {escape_markdown(next_player.full_name)}"
-                    print(f"⏭️ Next player: {next_player.full_name}")
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
+            ])
 
-        # Если это предложение покупки и дубль, добавляем информацию о дубле
-        if cell_action["action"] == "buy_property" and dice1 == dice2:
-            response += "\n\n🎲 *ДУБЛЬ! Если купите/пропустите - ходите еще раз!*"
+        elif cell_action["action"] in ["chance_card", "chest_card"]:
+            card = cell_action.get("card")
+            if card:
+                response_lines.append("")
+                card_text = escape_markdown(card.get('text', ''))
+                response_lines.append(f"🎯 *{card_text}*")
 
-        print(f"📤 Sending response to user...")
+                # Применяем действие карты
+                card_result = game.apply_card_action(current_player, card)
+                if card_result.get("message"):
+                    card_msg = escape_markdown(card_result['message'])
+                    response_lines.append(f"📝 {card_msg}")
 
-        # Отправляем сообщение
-        await update.message.reply_text(
-            response,
-            parse_mode="Markdown"
-        )
+            # После карты сразу передаем ход
+            if dice1 != dice2:
+                game.next_turn()
 
-        print("✅ Response sent successfully")
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
+            ])
 
-        # Сохраняем игру (даже если есть предложение покупки)
+        else:
+            # Для остальных действий
+            if dice1 != dice2:
+                game.next_turn()
+
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
+            ])
+
+        # Создаем изображение
+        text_message = "\n".join(response_lines)
+        player_color = getattr(current_player, 'color', '🔴')
+
+        # Отладочный вывод перед отправкой
+        print(f"=== DEBUG: Текст для отправки ===")
+        print(text_message[:500])
+        print(f"=== Конец отладки ===")
+
+        try:
+            combined_bytes = get_combined_board_bytes(game_data, text_message, player_color)
+
+            # Отправляем изображение с кнопками
+            if keyboard:
+                await update.message.reply_photo(
+                    photo=combined_bytes,
+                    caption=text_message[:1024],
+                    parse_mode="Markdown",
+                    reply_markup=keyboard
+                )
+            else:
+                await update.message.reply_photo(
+                    photo=combined_bytes,
+                    caption=text_message[:1024],
+                    parse_mode="Markdown"
+                )
+
+        except Exception as e:
+            print(f"❌ Ошибка создания изображения: {e}")
+            # Отправляем только текст с кнопками (БЕЗ parse_mode для теста)
+            if keyboard:
+                await update.message.reply_text(text_message, reply_markup=keyboard)
+            else:
+                await update.message.reply_text(text_message)
+
+        # Сохраняем игру
         game_manager.save_game_state(game.game_id)
-        print("💾 Game saved")
 
         print(f"=== ROLL COMMAND FINISHED ===\n")
 
     except Exception as e:
-        print(f"\n❌❌❌ CRITICAL ERROR in roll_command:")
-        print(f"Error type: {type(e).__name__}")
-        print(f"Error message: {str(e)}")
+        print(f"\n❌❌❌ Ошибка в roll_command:")
+        print(f"Тип ошибки: {type(e).__name__}")
+        print(f"Сообщение: {str(e)}")
         import traceback
         traceback.print_exc()
 
@@ -531,8 +744,40 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+async def notify_next_player(game, context, current_user_id=None):
+    """Уведомляет следующего игрока о его ходе"""
+    next_player = game.get_current_player()
+
+    if next_player and (not current_user_id or next_player.user_id != current_user_id):
+        mention = mention_player(
+            next_player.user_id,
+            next_player.username,
+            next_player.full_name
+        )
+
+        try:
+            # Отправляем в личку
+            #await context.bot.send_message(
+               # chat_id=next_player.user_id,
+              #  text=f"🎯 *Ваш ход, {next_player.full_name}!*\n\n"
+                #     f"Используйте /roll для броска кубиков",
+               # parse_mode="Markdown",
+               # reply_markup=get_game_actions_keyboard()
+          #  )
+
+            # Также можно отправить в общий чат
+            await context.bot.send_message(
+                chat_id=game.game_id,  # если есть ID чата
+                text=f"🎯 *Следующий ход: {mention}!*\n\n"
+                     f"Используйте /roll для броска кубиков",
+                parse_mode="Markdown"
+             )
+
+        except Exception as e:
+            logger.error(f"Не удалось уведомить игрока {next_player.user_id}: {e}")
+
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для покупки собственности после броска"""
+    """Команда для покупки собственности с отображением на поле"""
     try:
         user = update.effective_user
         print(f"\n=== BUY COMMAND STARTED ===")
@@ -543,10 +788,7 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not buy_offer:
             await update.message.reply_text(
                 "❌ *Нет активного предложения покупки!*\n\n"
-                "Чтобы купить собственность:\n"
-                "1. Бросьте кубики: `/roll`\n"
-                "2. Попадите на свободный участок\n"
-                "3. Используйте `/buy` в течение 30 секунд",
+                "Используйте /buy только когда вам предложили купить собственность.",
                 parse_mode="Markdown"
             )
             return
@@ -557,19 +799,6 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ *Это предложение покупки не для вас!*",
                 parse_mode="Markdown"
             )
-            return
-
-        # Проверяем срок действия предложения (30 секунд)
-        timestamp = buy_offer.get('timestamp', 0)
-        current_time = datetime.now().timestamp()
-        if current_time - timestamp > 30:
-            await update.message.reply_text(
-                "❌ *Время на покупку истекло!*",
-                parse_mode="Markdown"
-            )
-            # Очищаем предложение
-            context.user_data.pop('buy_offer', None)
-            context.user_data.pop('buy_timer', None)
             return
 
         # Получаем игру
@@ -586,77 +815,159 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Покупаем собственность
         success = game.board.buy_property(player, buy_offer['position'])
 
+        # Очищаем предложение покупки
+        context.user_data.pop('buy_offer', None)
+
+        # Подготавливаем данные для отображения
+        players_data = []
+        properties_data = {}
+
+        for player_id, game_player in game.players.items():
+            players_data.append({
+                "id": player_id,
+                "name": game_player.full_name,
+                "position": game_player.position,
+                "color": getattr(game_player, 'color', '🔴'),
+                "money": game_player.money
+            })
+
+        # Собираем обновленную информацию о собственности
+        for board_cell in game.board.cells:
+            if hasattr(board_cell, 'owner_id') and board_cell.owner_id:
+                properties_data[board_cell.id] = {
+                    "owner": board_cell.owner_id,
+                    "houses": getattr(board_cell, 'houses', 0),
+                    "hotel": getattr(board_cell, 'hotel', False)
+                }
+
+        game_data = {
+            "players": players_data,
+            "properties": properties_data
+        }
+
+        cell = game.board.get_cell(buy_offer['position'])
+        cell_name = cell.name if cell else "недвижимость"
+
         if success:
-            # Очищаем предложение покупки
-            context.user_data.pop('buy_offer', None)
-            context.user_data.pop('buy_timer', None)
+            # Формируем сообщение об успешной покупке
+            text_lines = []
+            text_lines.append(f"✅ *ПОКУПКА ОФОРМЛЕНА!*")
+            text_lines.append("")
+            text_lines.append(f"🏠 Вы купили *{cell_name}*")
+            text_lines.append(f"💸 Потрачено: *${cell.price if hasattr(cell, 'price') else 0}*")
+            text_lines.append(f"💰 Остаток: *${player.money}*")
+            text_lines.append("")
 
-            cell = game.board.get_cell(buy_offer['position'])
-            cell_name = cell.name if cell else buy_offer['cell_name']
+            # Создаем совмещенное изображение
+            text_message = "\n".join(text_lines)
+            player_color = getattr(player, 'color', '🔴')
 
-            response = f"✅ *ПОКУПКА ОФОРМЛЕНА!*\n\n"
-            response += f"🏠 Вы купили *{cell_name}*\n"
-            response += f"💰 Потрачено: *${buy_offer['price']}*\n"
-            response += f"🏦 Остаток: *${player.money}*\n\n"
-            response += f"🎲 Теперь у вас:\n"
-            response += f"• Улиц: {len(player.properties)}\n"
-            response += f"• Вокзалов: {len(player.stations)}\n"
-            response += f"• Предприятий: {len(player.utilities)}"
+            combined_bytes = get_combined_board_bytes(
+                game_data,
+                text_message,
+                player_color
+            )
 
-            # Проверяем дубль
-            if buy_offer.get('double'):
-                response += f"\n\n🎲 *ДУБЛЬ!*\n🎯 Ходите еще раз!\n\nИспользуйте `/roll`"
-                # Не передаем ход при дубле
-            else:
-                # Переход хода
-                game.next_turn()
-                next_player = game.get_current_player()
-                response += f"\n\n⏭️ *Ход переходит*\n🎯 {next_player.full_name}"
-
-                # Уведомляем следующего игрока
-                try:
-                    await context.bot.send_message(
-                        chat_id=next_player.user_id,
-                        text=f"🎯 *Ваш ход!*\n\nИспользуйте `/roll`"
-                    )
-                except:
-                    pass
-
-            await update.message.reply_text(response, parse_mode="Markdown")
+            # Отправляем изображение с результатом покупки
+            await update.message.reply_photo(
+                photo=combined_bytes,
+                caption=text_message[:1024],
+                parse_mode="Markdown"
+            )
 
             # Уведомляем других игроков
             for other_id, other_player in game.players.items():
                 if other_id != user.id:
                     try:
-                        await context.bot.send_message(
+                        # Для других игроков тоже отправляем изображение
+                        other_text = f"🏠 *{player.full_name} купил(а) {cell_name}!*"
+                        other_combined_bytes = get_combined_board_bytes(
+                            game_data,
+                            other_text,
+                            getattr(other_player, 'color', '🔴')
+                        )
+
+                        await context.bot.send_photo(
                             chat_id=other_id,
-                            text=f"🏠 *{player.full_name} купил(а) {cell_name}!*",
+                            photo=other_combined_bytes,
+                            caption=other_text,
                             parse_mode="Markdown"
                         )
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"❌ Не удалось уведомить игрока {other_id}: {e}")
 
-            # Сохраняем игру
-            game_manager.save_game_state(game.game_id)
+            # Переход хода (если не дубль)
+            if not buy_offer.get('double'):
+                game.next_turn()
+                next_player = game.get_current_player()
+
+                if next_player:
+                    try:
+                        # Уведомляем следующего игрока с изображением
+                        next_text = f"🎯 *Ваш ход!*\n\nИспользуйте `/roll`"
+                        next_game_data = game_data.copy()
+
+                        next_combined_bytes = get_combined_board_bytes(
+                            next_game_data,
+                            next_text,
+                            getattr(next_player, 'color', '🔴')
+                        )
+
+                        await context.bot.send_photo(
+                            chat_id=next_player.user_id,
+                            photo=next_combined_bytes,
+                            caption=next_text,
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        print(f"❌ Не удалось уведомить следующего игрока: {e}")
+            else:
+                # При дубле игрок ходит еще раз
+                double_text = f"🎲 *ДУБЛЬ!*\n🎯 Ходите еще раз!\n\nИспользуйте `/roll`"
+                double_combined_bytes = get_combined_board_bytes(
+                    game_data,
+                    double_text,
+                    player_color
+                )
+
+                await context.bot.send_photo(
+                    chat_id=user.id,
+                    photo=double_combined_bytes,
+                    caption=double_text,
+                    parse_mode="Markdown"
+                )
 
             print(f"=== BUY COMMAND FINISHED SUCCESS ===")
 
         else:
             # Покупка не удалась
-            await update.message.reply_text(
-                f"❌ *Не удалось купить!*\n\n"
-                f"Возможные причины:\n"
-                f"1. Недостаточно денег\n"
-                f"2. Собственность уже куплена\n"
-                f"3. Ошибка системы\n\n"
-                f"💰 Нужно: ${buy_offer['price']}\n"
-                f"💳 У вас: ${player.money}",
+            text_lines = []
+            text_lines.append(f"❌ *НЕ УДАЛОСЬ КУПИТЬ!*")
+            text_lines.append("")
+            text_lines.append(f"🏠 *{cell_name}*")
+            text_lines.append("")
+            text_lines.append("📋 *Возможные причины:*")
+            text_lines.append("1. Недостаточно денег")
+            text_lines.append("2. Собственность уже куплена")
+            text_lines.append("3. Ошибка системы")
+
+            text_message = "\n".join(text_lines)
+            player_color = getattr(player, 'color', '🔴')
+
+            combined_bytes = get_combined_board_bytes(
+                game_data,
+                text_message,
+                player_color
+            )
+
+            await update.message.reply_photo(
+                photo=combined_bytes,
+                caption=text_message[:1024],
                 parse_mode="Markdown"
             )
 
-            # Очищаем предложение
-            context.user_data.pop('buy_offer', None)
-            context.user_data.pop('buy_timer', None)
+        # Сохраняем игру
+        game_manager.save_game_state(game.game_id)
 
     except Exception as e:
         print(f"❌ ERROR in buy_command: {e}")
@@ -665,12 +976,98 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка при покупке: {str(e)}")
 
 
+async def notify_next_player(game, context, current_user_id=None):
+    """Уведомляет следующего игрока о его ходе"""
+    next_player = game.get_current_player()
+
+    if next_player and (not current_user_id or next_player.user_id != current_user_id):
+        mention = mention_player(
+            next_player.user_id,
+            next_player.username,
+            next_player.full_name
+        )
+
+        try:
+            await context.bot.send_message(
+                chat_id=next_player.user_id,  # или ID группового чата
+                text=f"🎯 *Ваш ход, {mention}!*\n\n"
+                     f"Используйте /roll для броска кубиков",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Не удалось уведомить игрока {next_player.user_id}: {e}")
+
+            # Альтернативный вариант - отправка в общий чат
+            if game.game_id:  # если игра ведется в групповом чате
+                await context.bot.send_message(
+                    chat_id=game.game_id,
+                    text=f"🎯 *Следующий ход: {next_player.full_name}!*\n\n"
+                         f"Используйте /roll для броска кубиков",
+                    parse_mode="Markdown"
+                )
+
+async def send_combined_game_board(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                   game, caption: str = "🎮 Текущее состояние игры",
+                                   player_color: str = "🔴") -> bool:
+    """Отправляет совмещенное изображение игрового поля с текстом"""
+    try:
+        # Подготавливаем данные для рендерера
+        players_data = []
+        properties_data = {}
+
+        for player_id, player in game.players.items():
+            players_data.append({
+                "id": player_id,
+                "name": player.full_name,
+                "position": player.position,
+                "color": getattr(player, 'color', '🔴'),
+                "money": player.money
+            })
+
+        # Собираем информацию о собственности
+        for cell in game.board.cells:
+            if hasattr(cell, 'owner_id') and cell.owner_id:
+                properties_data[cell.id] = {
+                    "owner": cell.owner_id,
+                    "houses": getattr(cell, 'houses', 0),
+                    "hotel": getattr(cell, 'hotel', False)
+                }
+
+        # Генерируем совмещенное изображение
+        game_data = {
+            "players": players_data,
+            "properties": properties_data
+        }
+
+        combined_bytes = get_combined_board_bytes(game_data, caption, player_color)
+
+        # Отправляем в Telegram
+        if update.callback_query:
+            await update.callback_query.message.reply_photo(
+                photo=combined_bytes,
+                caption=caption[:1024],  # Ограничение Telegram
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_photo(
+                photo=combined_bytes,
+                caption=caption[:1024],
+                parse_mode="Markdown"
+            )
+
+        return True
+
+    except Exception as e:
+        print(f"❌ Ошибка при отправке совмещенного поля: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для пропуска покупки"""
     try:
         user = update.effective_user
         print(f"\n=== SKIP COMMAND STARTED ===")
-        print(f"User ID: {user.id}, Name: {user.full_name}")
 
         # Проверяем активное предложение покупки
         buy_offer = context.user_data.get('buy_offer')
@@ -678,7 +1075,7 @@ async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not buy_offer:
             await update.message.reply_text(
                 "❌ *Нет активного предложения покупки!*\n\n"
-                "Используйте `/skip` только когда вам предложили купить собственность.",
+                "Используйте /skip только когда вам предложили купить собственность.",
                 parse_mode="Markdown"
             )
             return
@@ -689,19 +1086,6 @@ async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ *Это предложение покупки не для вас!*",
                 parse_mode="Markdown"
             )
-            return
-
-        # Проверяем срок действия предложения (30 секунд)
-        timestamp = buy_offer.get('timestamp', 0)
-        current_time = datetime.now().timestamp()
-        if current_time - timestamp > 30:
-            await update.message.reply_text(
-                "❌ *Время на покупку истекло!*",
-                parse_mode="Markdown"
-            )
-            # Очищаем предложение
-            context.user_data.pop('buy_offer', None)
-            context.user_data.pop('buy_timer', None)
             return
 
         # Получаем игру
@@ -715,14 +1099,15 @@ async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Игрок не найден!")
             return
 
+        cell = game.board.get_cell(buy_offer['position'])
+
         # Очищаем предложение покупки
         context.user_data.pop('buy_offer', None)
-        context.user_data.pop('buy_timer', None)
 
         # Уведомление о пропуске
         response = f"⏭️ *ПОКУПКА ПРОПУЩЕНА*\n\n"
-        response += f"🏠 Вы отказались от *{buy_offer['cell_name']}*\n"
-        response += f"💰 Цена: ${buy_offer['price']}\n"
+        response += f"🏠 Вы отказались от *{cell.name if cell else 'недвижимости'}*\n"
+        response += f"💰 Цена: ${cell.price if hasattr(cell, 'price') else 0}\n"
         response += f"🏦 Ваш баланс: *${player.money}*"
 
         # Проверяем дубль
@@ -760,15 +1145,7 @@ async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
         await update.message.reply_text(f"❌ Ошибка при пропуске: {str(e)}")
 
-# ДОБАВЬТЕ ТАЙМЕР ДЛЯ ОЧИСТКИ ПРЕДЛОЖЕНИЙ
-async def clear_buy_offer(context: ContextTypes.DEFAULT_TYPE):
-    """Очистка просроченных предложений покупки"""
-    for user_id in list(context.user_data.keys()):
-        if 'buy_offer' in context.user_data.get(user_id, {}):
-            # Проверяем время (можно добавить timestamp в buy_offer)
-            # Если прошло больше 30 секунд - очищаем
-            context.user_data[user_id].pop('buy_offer', None)
-            context.user_data[user_id].pop('buy_timer', None)
+
 async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик /leave"""
     user = update.effective_user
@@ -915,12 +1292,305 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
 
     try:
+        # Обработка кнопки "Купить"
+        if data.startswith("buy_"):
+            parts = data.split("_")
+            if len(parts) >= 3:
+                game_id = parts[1]
+                position = int(parts[2])
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена", show_alert=True)
+                    return
+
+                player = game.players.get(user.id)
+                if not player:
+                    await query.answer("❌ Вы не в этой игре", show_alert=True)
+                    return
+
+                cell = game.board.get_cell(position)
+                if not cell:
+                    await query.answer("❌ Клетка не найдена", show_alert=True)
+                    return
+
+                # Проверяем, что клетка свободна
+                if cell.owner_id:
+                    await query.answer("❌ Собственность уже куплена", show_alert=True)
+                    return
+
+                # Проверяем деньги
+                price = cell.price if hasattr(cell, 'price') else 0
+                if player.money < price:
+                    await query.answer(f"❌ Недостаточно денег! Нужно ${price}", show_alert=True)
+                    return
+
+                # Покупаем собственность
+                success = game.board.buy_property(player, position)
+
+                if success:
+                    # Очищаем предложение покупки
+                    key = f'buy_offer_{game_id}_{position}'
+                    context.user_data.pop(key, None)
+
+                    # Обновляем сообщение
+                    await query.edit_message_caption(
+                        caption=f"✅ {player.full_name} купил(а) {cell.name} за ${price}!\n\n"
+                                f"💰 Баланс: ${player.money}",
+                        parse_mode="Markdown",
+                        reply_markup=None
+                    )
+
+                    # Проверяем дубль
+                    double = False
+                    buy_offer_key = f'buy_offer_{game_id}_{position}'
+                    if buy_offer_key in context.user_data:
+                        double = context.user_data[buy_offer_key].get('double', False)
+                        context.user_data.pop(buy_offer_key, None)
+
+                    if not double:
+                        # Переход хода
+                        game.next_turn()
+                        await notify_next_player(game, context, user.id)
+                    else:
+                        # При дубле игрок ходит еще раз
+                        await context.bot.send_message(
+                            chat_id=user.id,
+                            text=f"🎲 *ДУБЛЬ!*\n🎯 Ходите еще раз!\n\nИспользуйте `/roll`",
+                            parse_mode="Markdown"
+                        )
+
+                    game_manager.save_game_state(game_id)
+
+                    # Уведомляем других игроков
+                    for other_id, other_player in game.players.items():
+                        if other_id != user.id:
+                            try:
+                                mention = mention_player(
+                                    user.id,
+                                    user.username,
+                                    user.full_name
+                                )
+                                await context.bot.send_message(
+                                    chat_id=other_id,
+                                    text=f"🏠 *{player.full_name} купил(а) {cell.name}!*",
+                                    parse_mode="Markdown"
+                                )
+                            except Exception as e:
+                                print(f"❌ Не удалось уведомить игрока {other_id}: {e}")
+
+                else:
+                    await query.answer("❌ Не удалось купить", show_alert=True)
+
+        # Обработка кнопки "Пропустить"
+        elif data.startswith("skip_"):
+            parts = data.split("_")
+            if len(parts) >= 3:
+                game_id = parts[1]
+                position = int(parts[2])
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена", show_alert=True)
+                    return
+
+                player = game.players.get(user.id)
+                if not player:
+                    await query.answer("❌ Вы не в этой игре", show_alert=True)
+                    return
+
+                cell = game.board.get_cell(position)
+                if not cell:
+                    await query.answer("❌ Клетка не найдена", show_alert=True)
+                    return
+
+                # Очищаем предложение покупки
+                key = f'buy_offer_{game_id}_{position}'
+                context.user_data.pop(key, None)
+
+                # Обновляем сообщение
+                await query.edit_message_caption(
+                    caption=f"⏭️ {player.full_name} пропустил(а) покупку {cell.name}",
+                    parse_mode="Markdown",
+                    reply_markup=None
+                )
+
+                # Проверяем дубль
+                double = False
+                buy_offer_key = f'buy_offer_{game_id}_{position}'
+                if buy_offer_key in context.user_data:
+                    double = context.user_data[buy_offer_key].get('double', False)
+                    context.user_data.pop(buy_offer_key, None)
+
+                if not double:
+                    # Переход хода
+                    game.next_turn()
+                    await notify_next_player(game, context, user.id)
+                else:
+                    # При дубле игрок ходит еще раз
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=f"🎲 *ДУБЛЬ!*\n🎯 Ходите еще раз!\n\nИспользуйте `/roll`",
+                        parse_mode="Markdown"
+                    )
+
+                game_manager.save_game_state(game_id)
+
+        # Обработка кнопки "Передать ход"
+        elif data.startswith("pass_turn_"):
+            game_id = data.replace("pass_turn_", "")
+
+            game = game_manager.get_game(game_id)
+            if not game:
+                await query.answer("❌ Игра не найдена", show_alert=True)
+                return
+
+            player = game.players.get(user.id)
+            if not player:
+                await query.answer("❌ Вы не в этой игре", show_alert=True)
+                return
+
+            # Переход хода
+            game.next_turn()
+
+            # Обновляем сообщение
+            await query.edit_message_caption(
+                caption=f"⏭️ {player.full_name} передал(а) ход",
+                parse_mode="Markdown",
+                reply_markup=None
+            )
+
+            await notify_next_player(game, context, user.id)
+            game_manager.save_game_state(game_id)
+
+        # Обработка тюремных кнопок
+        elif data.startswith("jail_"):
+            if data.startswith("jail_roll_"):
+                game_id = data.replace("jail_roll_", "")
+                game = game_manager.get_game(game_id)
+                if game and game.players.get(user.id):
+                    player = game.players[user.id]
+
+                    dice1, dice2, total = game.roll_dice()
+
+                    if dice1 == dice2:
+                        # Дубль - выходим из тюрьмы
+                        player.release_from_jail()
+                        await query.edit_message_text(
+                            f"🎲 *ДУБЛЬ!*\n🎯 {dice1} + {dice2} = {total}\n\n"
+                            f"🔓 Вы вышли из тюрьмы!\n"
+                            f"🎉 Бесплатно!\n\n"
+                            f"Ходите еще раз: /roll",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        # Не дубль - остаемся в тюрьме
+                        player.jail_turns += 1
+
+                        if player.jail_turns >= 3:
+                            # После 3-х неудачных попыток платить штраф
+                            await query.edit_message_text(
+                                f"🎲 *Нет дубля*\n🎯 {dice1} + {dice2} = {total}\n\n"
+                                f"🔒 Ходов в тюрьме: {player.jail_turns}/3\n"
+                                f"💵 Нужно заплатить $50\n\n"
+                                f"Используйте кнопку 💵 Заплатить $50",
+                                parse_mode="Markdown"
+                            )
+                        else:
+                            await query.edit_message_text(
+                                f"🎲 *Нет дубля*\n🎯 {dice1} + {dice2} = {total}\n\n"
+                                f"🔒 Остаетесь в тюрьме\n"
+                                f"📈 Ходов в тюрьме: {player.jail_turns}/3",
+                                parse_mode="Markdown"
+                            )
+
+                    game_manager.save_game_state(game_id)
+
+            elif data.startswith("jail_pay_"):
+                game_id = data.replace("jail_pay_", "")
+                game = game_manager.get_game(game_id)
+                if game and game.players.get(user.id):
+                    player = game.players[user.id]
+
+                    if player.money >= Config.JAIL_FINE:
+                        player.deduct_money(Config.JAIL_FINE)
+                        player.release_from_jail()
+
+                        await query.edit_message_text(
+                            f"💵 *Штраф оплачен!*\n"
+                            f"💸 Списан: ${Config.JAIL_FINE}\n"
+                            f"🔓 Вы вышли из тюрьмы!\n"
+                            f"💰 Ваш баланс: ${player.money}\n\n"
+                            f"Ваш ход: /roll",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await query.answer(
+                            f"❌ Недостаточно денег!\n💸 Нужно: ${Config.JAIL_FINE}\n💰 У вас: ${player.money}",
+                            show_alert=True
+                        )
+
+                    game_manager.save_game_state(game_id)
+
+            elif data.startswith("jail_card_"):
+                game_id = data.replace("jail_card_", "")
+                game = game_manager.get_game(game_id)
+                if game and game.players.get(user.id):
+                    player = game.players[user.id]
+
+                    if player.get_out_of_jail_cards > 0:
+                        player.get_out_of_jail_cards -= 1
+                        player.release_from_jail()
+
+                        await query.edit_message_text(
+                            f"🎫 *Карта использована!*\n"
+                            f"🔓 Вы вышли из тюрьмы!\n"
+                            f"📊 Осталось карт: {player.get_out_of_jail_cards}\n\n"
+                            f"Ваш ход: /roll",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await query.answer(
+                            "❌ Нет карт освобождения!\n🔒 Остаетесь в тюрьме\n💡 Карты можно получить из Шанса/Казна",
+                            show_alert=True
+                        )
+
+                    game_manager.save_game_state(game_id)
+
+            elif data.startswith("jail_skip_"):
+                game_id = data.replace("jail_skip_", "")
+                game = game_manager.get_game(game_id)
+                if game and game.players.get(user.id):
+                    player = game.players[user.id]
+
+                    player.jail_turns += 1
+
+                    if player.jail_turns >= 3:
+                        # После 3-х ходов в тюрьме - платить штраф
+                        await query.edit_message_text(
+                            f"⏳ *Пропущено 3 хода в тюрьме*\n"
+                            f"💵 Нужно заплатить $50\n\n"
+                            f"Используйте кнопку 💵 Заплатить $50",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        # Переход хода
+                        game.next_turn()
+                        await query.edit_message_text(
+                            f"⏳ *Пропущен ход*\n"
+                            f"📈 Ходов в тюрьме: {player.jail_turns}/3",
+                            parse_mode="Markdown"
+                        )
+                        await notify_next_player(game, context, user.id)
+
+                    game_manager.save_game_state(game_id)
+
         # Главное меню
-        if data == "menu_new_game":
+        elif data == "menu_new_game":
             await newgame_command(query.message, context)
 
         elif data == "menu_join_game":
-            await query.message.edit_text(
+            await query.edit_message_text(
                 "👥 *Присоединиться к игре*\n\n"
                 "Введите команду:\n"
                 "`/join КОД_ИГРЫ`\n\n"
@@ -1000,117 +1670,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data == "game_leave":
             await leave_command(query.message, context)
-        # В функции button_handler добавьте обработку тюрьмы:
-        elif data.startswith("jail_roll_"):
-            game_id = data.replace("jail_roll_", "")
-            game = game_manager.get_game(game_id)
-            if game and game.players.get(user.id):
-                player = game.players[user.id]
-
-                # Бросаем кубики
-                dice1, dice2, total = game.roll_dice()
-
-                if dice1 == dice2:
-                    # Дубль - выходим из тюрьмы
-                    player.in_jail = False
-                    player.jail_turns = 0
-                    player.status = PlayerStatus.ACTIVE
-
-                    await query.message.edit_text(
-                        f"🎲 *ДУБЛЬ!*\n"
-                        f"🎯 {dice1} + {dice2} = {total}\n"
-                        f"🔓 Вы вышли из тюрьмы!\n"
-                        f"🎉 Бесплатно!",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    # Не дубль - остаемся в тюрьме
-                    player.jail_turns += 1
-
-                    await query.message.edit_text(
-                        f"🎲 *Нет дубля*\n"
-                        f"🎯 {dice1} + {dice2} = {total}\n"
-                        f"🔒 Остаетесь в тюрьме\n"
-                        f"📈 Ходов в тюрьме: {player.jail_turns}/3",
-                        parse_mode="Markdown"
-                    )
-
-                game_manager.save_game_state(game_id)
-
-        elif data.startswith("jail_pay_"):
-            game_id = data.replace("jail_pay_", "")
-            game = game_manager.get_game(game_id)
-            if game and game.players.get(user.id):
-                player = game.players[user.id]
-
-                if player.money >= Config.JAIL_FINE:
-                    player.deduct_money(Config.JAIL_FINE)
-                    player.in_jail = False
-                    player.jail_turns = 0
-                    player.status = PlayerStatus.ACTIVE
-
-                    await query.message.edit_text(
-                        f"💵 *Штраф оплачен!*\n"
-                        f"💸 Списан: ${Config.JAIL_FINE}\n"
-                        f"🔓 Вы вышли из тюрьмы!\n"
-                        f"💰 Ваш баланс: ${player.money}",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    await query.message.edit_text(
-                        f"❌ *Недостаточно денег!*\n"
-                        f"💸 Нужно: ${Config.JAIL_FINE}\n"
-                        f"💰 У вас: ${player.money}\n"
-                        f"🔒 Остаетесь в тюрьме",
-                        parse_mode="Markdown"
-                    )
-
-                game_manager.save_game_state(game_id)
-
-        elif data.startswith("jail_card_"):
-            game_id = data.replace("jail_card_", "")
-            game = game_manager.get_game(game_id)
-            if game and game.players.get(user.id):
-                player = game.players[user.id]
-
-                if player.get_out_of_jail_cards > 0:
-                    player.get_out_of_jail_cards -= 1
-                    player.in_jail = False
-                    player.jail_turns = 0
-                    player.status = PlayerStatus.ACTIVE
-
-                    await query.message.edit_text(
-                        f"🎫 *Карта использована!*\n"
-                        f"🔓 Вы вышли из тюрьмы!\n"
-                        f"📊 Осталось карт: {player.get_out_of_jail_cards}",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    await query.message.edit_text(
-                        f"❌ *Нет карт освобождения!*\n"
-                        f"🔒 Остаетесь в тюрьме\n"
-                        f"💡 Карты можно получить из Шанса/Казна",
-                        parse_mode="Markdown"
-                    )
-
-                game_manager.save_game_state(game_id)
-
-        elif data.startswith("jail_skip_"):
-            game_id = data.replace("jail_skip_", "")
-            game = game_manager.get_game(game_id)
-            if game and game.players.get(user.id):
-                player = game.players[user.id]
-
-                player.jail_turns += 1
-
-                await query.message.edit_text(
-                    f"⏳ *Пропускаете ход*\n"
-                    f"📈 Ходов в тюрьме: {player.jail_turns}/3\n"
-                    f"🔒 Остаетесь в тюрьме",
-                    parse_mode="Markdown"
-                )
-
-                game_manager.save_game_state(game_id)
 
     except Exception as e:
         logger.error(f"Ошибка обработки кнопки {data}: {e}")
@@ -1193,14 +1752,14 @@ async def properties_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # ВОКЗАЛЫ
     stations = getattr(player, 'stations', [])
     if stations:
-        response += f"🚂 *ВОКЗАЛЫ ({len(stations)}):*\n"
+        response += f"🚂 *МЕТРО ({len(stations)}):*\n"
         for station_id in stations:
             cell = game.board.get_cell(station_id)
             if cell and hasattr(cell, 'name'):
                 mortgaged_info = "💳 ЗАЛОЖЕН" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
                 response += f"• *{cell.name}* {mortgaged_info}\n"
     else:
-        response += "🚂 *ВОКЗАЛЫ:* нет\n"
+        response += "🚂 *МЕТРО:* нет\n"
 
     response += "\n"
 
@@ -1404,6 +1963,618 @@ async def clear_expired_offers(context: ContextTypes.DEFAULT_TYPE):
         import traceback
         traceback.print_exc()
 
+
+async def send_game_board(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                          game, caption: str = "🎮 Текущее состояние игры"):
+    """Отправляет изображение игрового поля"""
+    try:
+        # Подготавливаем данные для рендерера
+        players_data = []
+        for player_id, player in game.players.items():
+            players_data.append({
+                "id": player_id,
+                "name": player.full_name,
+                "position": player.position,
+                "color": getattr(player, 'color', '🔴'),
+                "money": player.money
+            })
+
+        # Собираем информацию о собственности
+        properties_data = {}
+        for cell in game.board.cells:
+            if hasattr(cell, 'owner_id') and cell.owner_id:
+                properties_data[cell.id] = {
+                    "owner": cell.owner_id,
+                    "houses": getattr(cell, 'houses', 0),
+                    "hotel": getattr(cell, 'hotel', False)
+                }
+
+        # Генерируем изображение
+        game_data = {
+            "players": players_data,
+            "properties": properties_data
+        }
+
+        board_image = board_renderer.render_board(game_data)
+
+        # Конвертируем в bytes
+        img_bytes = board_renderer.save_to_bytes(board_image)
+
+        # Отправляем в Telegram
+        if update.callback_query:
+            await update.callback_query.message.reply_photo(
+                photo=img_bytes,
+                caption=caption,
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_photo(
+                photo=img_bytes,
+                caption=caption,
+                parse_mode="Markdown"
+            )
+
+        return True
+
+    except Exception as e:
+        print(f"❌ Ошибка при отправке поля: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+# Команда для просмотра поля
+async def board_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать игровое поле"""
+    user = update.effective_user
+    game = game_manager.get_player_game(user.id)
+
+    if not game:
+        await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+        return
+
+    # Формируем подпись
+    caption = f"🎮 *Игровое поле*\n"
+    caption += f"🎲 Ход: {game.turn_count}\n"
+    caption += f"👥 Игроков: {len(game.players)}\n\n"
+
+    current = game.get_current_player()
+    if current:
+        caption += f"🎯 *Сейчас ходит:* {current.full_name}\n\n"
+
+    # Отправляем поле
+    success = await send_game_board(update, context, game, caption)
+
+    if not success:
+        await update.message.reply_text(
+            f"❌ Не удалось загрузить изображение поля\n\n{caption}",
+            parse_mode="Markdown"
+        )
+
+async def jail_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Главное меню тюрьмы - показывает опции"""
+    user = update.effective_user
+    game = game_manager.get_player_game(user.id)
+
+    if not game:
+        await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+        return
+
+    player = game.players.get(user.id)
+    if not player or not player.in_jail:
+        await update.message.reply_text("❌ Вы не в тюрьме!", parse_mode="Markdown")
+        return
+
+    current_player = game.get_current_player()
+    if not current_player or current_player.user_id != user.id:
+        await update.message.reply_text(
+            f"⏳ *Ждите своего хода!*\n"
+            f"Сейчас ходит: {escape_markdown(current_player.full_name)}",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Создаем клавиатуру
+    keyboard = []
+
+    # Проверяем доступные опции
+    if player.get_out_of_jail_cards > 0:
+        keyboard.append(
+            [InlineKeyboardButton("🎫 Использовать карту освобождения", callback_data=f"jail_card_{game.game_id}")])
+
+    keyboard.append(
+        [InlineKeyboardButton(f"💵 Заплатить ${Config.JAIL_FINE}", callback_data=f"jail_pay_{game.game_id}")])
+    keyboard.append([InlineKeyboardButton("🎲 Попытаться выбросить дубль", callback_data=f"jail_roll_{game.game_id}")])
+
+    await update.message.reply_text(
+        f"🔒 *ТЮРЬМА - Круг {player.jail_turns + 1}/3*\n\n"
+        f"👤 *Игрок:* {player.full_name}\n"
+        f"💰 *Баланс:* ${player.money}\n"
+        f"🎫 *Карт освобождения:* {player.get_out_of_jail_cards}\n\n"
+        f"*Выберите действие:*\n"
+        f"• `/jail_pay` - заплатить ${Config.JAIL_FINE}\n"
+        f"• `/jail_roll` - попытать удачу\n"
+        f"• `/jail_card` - использовать карту",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+
+async def jail_pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    game = game_manager.get_player_game(user.id)
+    if not game:
+        await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+        return
+
+    player = game.players.get(user.id)  # ← отдельное присваивание
+    if not player or not player.in_jail:
+        await update.message.reply_text("❌ Вы не в тюрьме!", parse_mode="Markdown")
+        return
+
+    current_player = game.get_current_player()
+    if not current_player or current_player.user_id != user.id:
+        await update.message.reply_text("⏳ *Не ваш ход!*", parse_mode="Markdown")
+        return
+
+    if game.get_current_player().user_id != user.id:
+        await update.message.reply_text("⏳ Ждите своего хода!", parse_mode="Markdown")
+        return
+
+    if player.money >= Config.JAIL_FINE:
+        player.deduct_money(Config.JAIL_FINE)
+        player.release_from_jail()
+        await update.message.reply_text(
+            f"💵 *Вы заплатили за выход!*\n"
+            f"💸 Списан: ${Config.JAIL_FINE}\n"
+            f"🔓 Вы вышли из тюрьмы!\n"
+            f"💰 Баланс: ${player.money}\n"
+            f"🎲 Теперь ваш ход! Используйте /roll.",
+            parse_mode="Markdown"
+        )
+        # ← НЕ передаем ход! Игрок вышел и может ходить сразу
+    else:
+        # ← ДОБАВИТЬ ЗДЕСЬ: увеличиваем круг и передаем ход
+        player.jail_turns += 1
+
+
+        if player.jail_turns >= 3:
+            # Автоматический выход через 3 круга
+            player.release_from_jail()
+            await update.message.reply_text(
+                f"❌ Недостаточно денег!\n"
+                f"⏰ Прошло 3 круга!\n"
+                f"🔓 Вы автоматически вышли из тюрьмы!\n"
+                f"🎲 Теперь ваш ход! Используйте /roll.",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Недостаточно денег!\n"
+                f"💸 Нужно: ${Config.JAIL_FINE}\n"
+                f"💰 У вас: ${player.money}\n"
+                f"🔒 Остаётесь в тюрьме.\n"
+                f"📅 Круг: {player.jail_turns}/3\n"
+                f"⏭️ Ход переходит следующему игроку.",
+                parse_mode="Markdown"
+            )
+            # ← ПЕРЕДАЧА ХОДА ЗДЕСЬ:
+            game.next_turn()
+            next_player = game.get_current_player()
+            if next_player:
+                try:
+                    await context.bot.send_message(
+                        chat_id=next_player.user_id,
+                        text=f"🎲 *Ваш ход!*\n\nИспользуйте `/roll`"
+                    )
+                except:
+                    pass
+
+    game_manager.save_game_state(game.game_id)
+
+
+async def jail_card_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    game = game_manager.get_player_game(user.id)
+    if not game:
+        await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+        return
+
+    player = game.players.get(user.id)  # ← отдельное присваивание
+    if not player or not player.in_jail:
+        await update.message.reply_text("❌ Вы не в тюрьме!", parse_mode="Markdown")
+        return
+
+    current_player = game.get_current_player()
+    if not current_player or current_player.user_id != user.id:
+        await update.message.reply_text("⏳ *Не ваш ход!*", parse_mode="Markdown")
+        return
+
+    if game.get_current_player().user_id != user.id:
+        await update.message.reply_text("⏳ Ждите своего хода!", parse_mode="Markdown")
+        return
+
+    if player.get_out_of_jail_cards > 0:
+        player.get_out_of_jail_cards -= 1
+        player.release_from_jail()
+        await update.message.reply_text(
+            f"🎫 *Карта использована!*\n"
+            f"🔓 Вы вышли из тюрьмы!\n"
+            f"📊 Осталось карт: {player.get_out_of_jail_cards}\n"
+            f"🎲 Теперь ваш ход! Используйте /roll.",
+            parse_mode="Markdown"
+        )
+        # ← НЕ передаем ход! Игрок вышел и может ходить сразу
+    else:
+        # ← ДОБАВИТЬ ЗДЕСЬ: увеличиваем круг и передаем ход
+        player.jail_turns += 1
+
+        if player.jail_turns >= 3:
+            # Автоматический выход через 3 круга
+            player.release_from_jail()
+            await update.message.reply_text(
+                f"❌ Нет карт освобождения!\n"
+                f"⏰ Прошло 3 круга!\n"
+                f"🔓 Вы автоматически вышли из тюрьмы!\n"
+                f"🎲 Теперь ваш ход! Используйте /roll.",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Нет карт освобождения!\n"
+                f"🔒 Остаётесь в тюрьме.\n"
+                f"📅 Круг: {player.jail_turns}/3\n"
+                f"⏭️ Ход переходит следующему игроку.",
+                parse_mode="Markdown"
+            )
+            # ← ПЕРЕДАЧА ХОДА ЗДЕСЬ:
+            game.next_turn()
+            next_player = game.get_current_player()
+            if next_player:
+                try:
+                    await context.bot.send_message(
+                        chat_id=next_player.user_id,
+                        text=f"🎲 *Ваш ход!*\n\nИспользуйте `/roll`"
+                    )
+                except:
+                    pass
+
+
+    game_manager.save_game_state(game.game_id)
+async def jail_roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    game = game_manager.get_player_game(user.id)
+    if not game:
+        await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+        return
+
+    player = game.players.get(user.id)  # ← отдельное присваивание
+    if not player or not player.in_jail:
+        await update.message.reply_text("❌ Вы не в тюрьме!", parse_mode="Markdown")
+        return
+
+    current_player = game.get_current_player()
+    if not current_player or current_player.user_id != user.id:
+        await update.message.reply_text("⏳ *Не ваш ход!*", parse_mode="Markdown")
+        return
+
+    if game.get_current_player().user_id != user.id:
+        await update.message.reply_text("⏳ Ждите своего хода!", parse_mode="Markdown")
+        return
+
+    dice1, dice2, total = game.roll_dice()
+
+    if dice1 == dice2:
+        # Успешный дубль — выход
+        player.release_from_jail()
+        await update.message.reply_text(
+            f"🎲 *ДУБЛЬ!*\n"
+            f"🎯 {dice1} + {dice2} = {total}\n"
+            f"🔓 Вы вышли из тюрьме бесплатно!\n"
+            f"🎲 Теперь ваш ход! Используйте /roll для продолжения.",
+            parse_mode="Markdown"
+        )
+        # ← НЕ передаем ход! Игрок вышел и может ходить сразу
+    else:
+        # Неудачная попытка
+        player.jail_turns += 1  # Увеличиваем круг
+
+        if player.jail_turns >= 3:
+            # 3-й ход — автоматический выход
+            player.release_from_jail()
+            await update.message.reply_text(
+                f"🎲 *Нет дубля*\n"
+                f"🎯 {dice1} + {dice2} = {total}\n"
+                f"⏰ Прошло 3 круга!\n"
+                f"🔓 Вы автоматически вышли из тюрьмы!\n"
+                f"🎲 Теперь ваш ход! Используйте /roll.",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                f"🎲 *Нет дубля*\n"
+                f"🎯 {dice1} + {dice2} = {total}\n"
+                f"🔒 Остаётесь в тюрьме.\n"
+                f"📅 Круг: {player.jail_turns}/3\n"
+                f"⏭️ Ход переходит следующему игроку.",
+                parse_mode="Markdown"
+            )
+            # ← ПЕРЕДАЧА ХОДА ЗДЕСЬ:
+            game.next_turn()
+            next_player = game.get_current_player()
+            if next_player:
+                try:
+                    await context.bot.send_message(
+                        chat_id=next_player.user_id,
+                        text=f"🎲 *Ваш ход!*\n\n"
+                             f"👤 {next_player.full_name}\n"
+                             f"💰 Баланс: ${next_player.money}\n\n"
+                             f"Используйте `/roll` чтобы бросить кубики",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+
+    game_manager.save_game_state(game.game_id)
+
+async def test_jail_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик /roll с полной обработкой клеток"""
+    try:
+        print(f"\n=== ROLL COMMAND STARTED ===")
+        user = update.effective_user
+        print(f"User ID: {user.id}, Name: {user.full_name}")
+
+        game = game_manager.get_player_game(user.id)
+
+        if not game:
+            print("❌ ERROR: Game not found")
+            await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+            return
+
+        print(f"✅ Game found: {game.game_id}")
+
+        if game.state.value != "in_game":
+            print(f"❌ ERROR: Game not in progress. State: {game.state}, Value: {game.state.value}")
+            await update.message.reply_text("❌ *Игра еще не началась!*", parse_mode="Markdown")
+            return
+
+        print("✅ Game is in progress")
+
+        current_player = game.get_current_player()
+        if not current_player:
+            print("❌ ERROR: No current player")
+            await update.message.reply_text("❌ *Нет текущего игрока!*", parse_mode="Markdown")
+            return
+
+        if current_player.user_id != user.id:
+            print(f"❌ ERROR: Not player's turn")
+            await update.message.reply_text(
+                f"❌ *Сейчас не ваш ход!*\nХодит: {escape_markdown(current_player.full_name)}",
+                parse_mode="Markdown"
+            )
+            return
+
+        print("✅ It's player's turn")
+        if current_player.in_jail:
+            print("🔒 Player is in jail, showing jail menu")
+
+            # Показываем меню тюрьмы НЕ передавая ход сразу
+            await jail_command(update, context)
+
+            # НЕ передаем ход сразу! Ждем выбора игрока
+            # Игрок должен сам выбрать действие через команды:
+            # /jail_pay, /jail_card, /jail_roll
+
+            # Сохраняем игру
+            game_manager.save_game_state(game.game_id)
+            print("⏸️ Player in jail - waiting for jail action")
+            return
+            # Бросок кубиков
+        # ТЕСТ: перемещение на клетку 30
+        old_position = current_player.position
+        target_position = 30
+
+        # Рассчитываем сколько нужно пройти
+        if old_position <= target_position:
+            needed_total = target_position - old_position
+        else:
+            needed_total = (40 - old_position) + target_position  # Через старт
+
+        # Создаем подходящие значения кубиков
+        dice1 = needed_total // 2
+        dice2 = needed_total - dice1
+        # Минимум 1 на кубике
+        if dice1 < 1: dice1 = 1
+        if dice2 < 1: dice2 = 1
+        total = dice1 + dice2
+
+        print(f"🎲 TEST Dice: {dice1} + {dice2} = {total} (цель: позиция 30)")
+
+        # Перемещаем на 30
+        current_player.position = target_position
+
+        # Создаем move_result вручную
+        passed_start = old_position > target_position
+        move_result = {
+            "old_position": old_position,
+            "new_position": target_position,
+            "spaces_moved": needed_total,
+            "passed_start": passed_start,
+            "double": (dice1 == dice2)
+        }
+
+        print(f"📍 TEST Move: {old_position} → {target_position}")
+
+        # Если прошли через старт
+        if passed_start:
+            current_player.add_money(Config.SALARY)
+            print(f"💰 Passed START: +${Config.SALARY}")
+
+        # Получаем клетку и обрабатываем действие
+        cell = game.board.get_cell(current_player.position)
+        cell_action = game.process_cell_action(current_player, total)
+        if cell_action.get("action") == "go_to_jail":
+            # Отправляем в тюрьму
+            current_player.position = 10
+            current_player.in_jail = True
+            current_player.jail_turns = 0
+
+            # ← СОЗДАЕМ НОВУЮ ПЕРЕМЕННУЮ jail_response:
+            jail_response = f"{current_player.color if hasattr(current_player, 'color') else '🎲'} "
+            jail_response += f"*{escape_markdown(current_player.full_name)} бросает кубики:*\n"
+            jail_response += f"🎯 {dice1} + {dice2} = *{total}*\n\n"
+
+            if move_result.get("passed_start"):
+                jail_response += f"💰 *Прошли СТАРТ!* +${Config.SALARY}\n\n"
+
+            jail_response += f"📍 *Перемещение:* {old_position} → {current_player.position}\n"
+            jail_response += f"💰 *Баланс:* ${current_player.money}\n\n"
+            jail_response += f"🏠 *Клетка {current_player.position}: {cell.name}*\n"
+            jail_response += f"\n🔒 *ВЫ ОТПРАВЛЕНЫ В ТЮРЬМУ!*\n"
+            jail_response += f"📍 Позиция: Тюрьма (клетка 10)\n"
+            jail_response += f"📅 Круг: 1/3\n\n"
+            jail_response += f"🎮 В следующий ваш ход используйте:\n"
+            jail_response += f"• `/jail` - меню тюрьмы\n"
+            jail_response += f"• `/jail_pay` - заплатить ${Config.JAIL_FINE}\n"
+            jail_response += f"• `/jail_roll` - попытать удачу\n"
+            jail_response += f"• `/jail_card` - использовать карту\n\n"
+
+            # Передаем ход
+            game.next_turn()
+            next_player = game.get_current_player()
+            if next_player:
+                jail_response += f"⏭️ *Следующий ход:* {next_player.color} {escape_markdown(next_player.full_name)}"
+
+            await update.message.reply_text(jail_response, parse_mode="Markdown")  # ← используем jail_response
+            game_manager.save_game_state(game.game_id)
+            return
+
+        # Формируем начальный ответ
+        # ТЕСТОВЫЙ ответ
+        response = f"🔧 *ТЕСТ: Активация клетки 30*\n\n"
+        response += f"{current_player.color if hasattr(current_player, 'color') else '🎲'} "
+        response += f"*{escape_markdown(current_player.full_name)} бросает кубики:*\n"
+        response += f"🎯 {dice1} + {dice2} = *{total}* (ТЕСТ - цель: клетка 30)\n\n"
+
+        if move_result.get("passed_start"):
+            response += f"💰 *Прошли СТАРТ!* +${Config.SALARY}\n\n"
+
+        response += f"📍 *Перемещение:* {old_position} → {current_player.position}\n"
+        response += f"💰 *Баланс:* ${current_player.money}\n\n"
+
+        # Отображаем информацию о клетке
+        response += f"🏠 *Клетка {current_player.position}: {cell.name}*\n"
+
+        # Проверяем, нужно ли обрабатывать ренту/налоги/карточки
+        should_apply_action = True
+
+        if cell_action["action"] == "buy_property":
+            should_apply_action = False
+            price = cell.price if hasattr(cell, 'price') else 0
+
+            # ДОБАВЛЯЕМ ПРОВЕРКУ НА ДЕНЬГИ, НО СОХРАНЯЕМ buy_offer В ЛЮБОМ СЛУЧАЕ
+            if current_player.money >= price:
+                has_enough_money = True
+                buy_option = "• `/buy` - купить сейчас\n"
+            else:
+                has_enough_money = False
+                buy_option = "• ❌ `/buy` - недостаточно средств\n"
+
+            # ВСЕГДА сохраняем предложение покупки (даже если нет денег, чтобы можно было скипнуть)
+            context.user_data['buy_offer'] = {
+                'game_id': game.game_id,
+                'position': current_player.position,
+                'price': price,
+                'cell_name': cell.name,
+                'player_id': user.id,
+                'dice1': dice1,
+                'dice2': dice2,
+                'double': (dice1 == dice2),
+                'cell_type': cell.type.value,
+                'timestamp': datetime.now().timestamp(),
+                'has_enough_money': has_enough_money  # Добавляем флаг
+            }
+
+            response += f"\n🏠 *СОБСТВЕННОСТЬ СВОБОДНА!*\n"
+            response += f"🏷 *{cell.name}*\n"
+
+            if cell.type == CellType.PROPERTY:
+                response += f"🎨 Тип: Улица"
+                if hasattr(cell, 'color_group'):
+                    response += f" (Цвет: {cell.color_group})\n"
+            elif cell.type == CellType.STATION:
+                response += f"🚂 Тип: Вокзал\n"
+            elif cell.type == CellType.UTILITY:
+                response += f"⚡ Тип: Предприятие\n"
+
+            response += f"💵 Цена покупки: *${price}*\n"
+            response += f"💰 У вас: *${current_player.money}*\n\n"
+
+            if current_player.money >= price:
+                response += f"✅ Достаточно средств для покупки!\n\n"
+            else:
+                response += f"❌ Недостаточно средств!\n\n"
+
+            response += f"📋 *Что делать:*\n"
+            response += buy_option
+            response += f"• `/skip` - пропустить покупку\n\n"
+
+            # ОБЯЗАТЕЛЬНО добавляем информацию о дубле если он есть
+            if dice1 == dice2:
+                response += "🎲 *ДУБЛЬ! Если купите/пропустите - ходите еще раз!*\n\n"
+
+        # Применяем другие действия клеток
+        elif should_apply_action:
+            action_result = game.apply_cell_action(current_player, cell_action, total)
+            if action_result.get("message"):
+                response += f"\n📋 *Действие:* {action_result['message']}\n"
+
+            # Если действие не покупка, обрабатываем дубль и переход хода
+            if dice1 == dice2:
+                response += "\n\n🎲 *Дубль! Ходите еще раз!*"
+                print("🎲 Double! Player gets another turn")
+            else:
+                # Передаем ход
+                game.next_turn()
+                next_player = game.get_current_player()
+
+                if next_player:
+                    # Добавляем цвет следующему игроку
+                    next_player_color = next_player.color if hasattr(next_player, 'color') else '🎲'
+                    response += f"\n\n⏭️ *Следующий ход:* {next_player_color} {escape_markdown(next_player.full_name)}"
+                    print(f"⏭️ Next player: {next_player.full_name}")
+
+
+        print(f"📤 Sending response to user...")
+
+        # Отправляем сообщение
+        await update.message.reply_text(
+            response,
+            parse_mode="Markdown"
+        )
+
+        print("✅ Response sent successfully")
+
+        # Сохраняем игру (даже если есть предложение покупки)
+        game_manager.save_game_state(game.game_id)
+        print("💾 Game saved")
+
+        print(f"=== ROLL COMMAND FINISHED ===\n")
+
+    except Exception as e:
+        print(f"\n❌❌❌ CRITICAL ERROR in roll_command:")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+        try:
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        except:
+            pass
+
+
+
 # ========== ЗАПУСК БОТА ==========
 
 def main():
@@ -1419,10 +2590,8 @@ def main():
         print(f"❌ Ошибка создания приложения: {e}")
         return
 
-        # Добавляем задание для очистки просроченных предложений (каждые 10 секунд)
-    job_queue = app.job_queue
-    if job_queue:
-        job_queue.run_repeating(clear_expired_offers, interval=10, first=5)
+    # Добавьте обработчик ошибок перед регистрацией команд
+    app.add_error_handler(error_handler)
 
     # Регистрируем команды
     commands = [
@@ -1437,18 +2606,31 @@ def main():
         ("games", games_command),
         ("help", help_command),
         ("status", status_command),
-        ("properties", properties_command),  # ← ДОЛЖНА БЫТЬ ЗАРЕГИСТРИРОВАНА
+        ("properties", properties_command),
         ("jail", jail_command),
+        ("jail_roll", jail_roll_command),  # ← НОВАЯ КОМАНДА
+        ("jail_pay", jail_pay_command),  # ← НОВАЯ КОМАНДА
+        ("jail_card", jail_card_command),  # ← НОВАЯ КОМАНДА
         ("buy", buy_command),
-        ("skip",skip_command),
+        ("skip", skip_command),
+        #("build_house", build_house_command),
+        ("test_jail", test_jail_command),  # ← НОВАЯ КОМАНДА (опционально)
+        #("build_house", build_house_command),
+        ("board", board_command),
     ]
 
+
+    # 1. ВСЕ КОМАНДЫ ПЕРВЫМИ
+    print("\n📋 Регистрируем команды:")
     for cmd, handler in commands:
         app.add_handler(CommandHandler(cmd, handler))
         print(f"✅ /{cmd}")
 
-    # Регистрируем кнопки
+    # 2. ОБРАБОТЧИК КНОПОК ВТОРЫМ
+    print("\n🔘 Регистрируем обработчик кнопок...")
     app.add_handler(CallbackQueryHandler(button_handler))
+    print(f"✅ CallbackQueryHandler зарегистрирован")
+
 
     print("\n✅ Бот запущен и готов к работе!")
     print("📱 Перейдите в Telegram и начните диалог с ботом")

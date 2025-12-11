@@ -28,7 +28,7 @@ class GameConfig:
     MAX_PLAYERS = 8
     BOARD_SIZE = 40
     SALARY = 200
-    JAIL_FINE = 50
+    JAIL_FINE = 200
     MIN_AUCTION_BID = 10
 
     # Карточки Шанс
@@ -88,6 +88,7 @@ class SimplePlayer:
         self.utilities = []
         self.in_jail = False
         self.jail_turns = 0
+        self.jail_attempts = 0
         self.get_out_of_jail_cards = 0
 
         # Назначаем цвет игроку
@@ -133,10 +134,25 @@ class SimplePlayer:
         return self.money >= amount
 
     def go_to_jail(self):
+        """Отправить игрока в тюрьму"""  # Добавлен docstring
         self.position = 10
         self.in_jail = True
         self.jail_turns = 0
+        self.jail_attempts = 0  # <-- ДОБАВЛЕНО
         self.status = PlayerStatus.IN_JAIL
+
+    def skip_jail_attempt(self):
+        """Пропустить попытку выхода из тюрьмы"""
+        self.jail_turns += 1
+
+        # Проверяем, не отсидел ли уже 3 хода
+        if self.jail_turns >= 3:
+            self.in_jail = False
+            self.jail_turns = 0
+            self.jail_attempts = 0
+            self.status = PlayerStatus.ACTIVE
+            return True  # Освобожден
+        return False
 
     def release_from_jail(self):
         self.in_jail = False
@@ -250,7 +266,7 @@ class Game:
         """Передать ход следующему игроку"""
         if not self.player_order:
             return
-
+        current_player = self.get_current_player()
         self.current_player_index = (self.current_player_index + 1) % len(self.player_order)
         self.double_count = 0
         self.turn_count += 1

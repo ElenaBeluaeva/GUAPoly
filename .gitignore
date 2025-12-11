@@ -98,9 +98,7 @@ Thumbs.db
 temp/
 tmp/
 
-# Assets (если не хотите коммитить сгенерированные изображения)
-assets/images/temp_*
-assets/images/game_board_*.png
+
 
 # PyInstaller
 *.spec
