@@ -49,23 +49,12 @@ def create_combined_image(game_data: Dict, text_message: str,
     # 1. Создаем изображение поля
     board_image = board_renderer.render_board(game_data, include_legend=show_legend)
 
-    # 2. Создаем изображение с текстом
-    text_image = create_text_image(text_message, board_image.width)
 
-    # 3. Объединяем изображения вертикально
-    total_height = board_image.height + text_image.height
-    combined = Image.new('RGB', (board_image.width, total_height), (255, 255, 255))
-
-    # Вставляем текстовую часть вверху
-    combined.paste(text_image, (0, 0))
-
-    # Вставляем поле под текстом
-    combined.paste(board_image, (0, text_image.height))
 
     # 4. Добавляем рамку текущего игрока
     # ИСПРАВЛЕНО: используем PLAYER_COLORS_RGB из текущего файла
     rgb_color = PLAYER_COLORS_RGB.get(player_color, (255, 50, 50))
-    draw = ImageDraw.Draw(combined)
+
 
     # Толстая цветная рамка вверху (5 пикселей)
     draw.rectangle(

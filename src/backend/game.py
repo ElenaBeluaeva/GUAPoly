@@ -34,25 +34,25 @@ class GameConfig:
     # Карточки Шанс
     CHANCE_CARDS = [
         {"text": "Отправляйтесь на клетку 'Старт'", "action": "move_to", "value": 0},
-        {"text": "Отправляйтесь в тюрьму", "action": "go_to_jail"},
-        {"text": "Получите $50", "action": "add_money", "value": 50},
-        {"text": "Заплатите $15", "action": "deduct_money", "value": 15},
-        {"text": "Освобождение из тюрьмы", "action": "get_out_of_jail"},
-        {"text": "Вас оштрафовали за превышение скорости. Заплатите $15", "action": "deduct_money", "value": 15},
-        {"text": "Вы заняли второе место в конкурсе красоты. Получите $10", "action": "add_money", "value": 10},
-        {"text": "Оплатите налог на образование $150", "action": "deduct_money", "value": 150},
+        {"text": "Вы ничего не делали весь семестр и теперь отправляетесь на комиссию", "action": "go_to_jail"},
+        {"text": "Получите стипендию 50₽", "action": "add_money", "value": 50},
+        {"text": "Заплатите 15₽ за обед в столовой", "action": "deduct_money", "value": 15},
+        {"text": "У вас перезачет по предмету, вы можете избежать комиссию, использовав освобождение", "action": "get_out_of_jail"},
+        {"text": "Вас оштрафовали за чрезмерные пропуски пар. Заплатите 15₽", "action": "deduct_money", "value": 15},
+        {"text": "Вы заняли первое место в конкурсе лучший профорг. Получите 10₽", "action": "add_money", "value": 10},
+        {"text": "Оплатите обучение за семестр 150₽", "action": "deduct_money", "value": 150},
     ]
 
     # Карточки Казна
     CHEST_CARDS = [
-        {"text": "Вы выиграли конкурс красоты. Получите $20", "action": "add_money", "value": 20},
-        {"text": "Оплатите налог на образование $100", "action": "deduct_money", "value": 100},
-        {"text": "Вы получили наследство $100", "action": "add_money", "value": 100},
-        {"text": "Отправляйтесь в тюрьму. Не проходите через 'Старт'", "action": "go_to_jail"},
-        {"text": "Банк выплачивает вам дивиденды $50", "action": "add_money", "value": 50},
-        {"text": "Возврат подоходного налога $20", "action": "add_money", "value": 20},
-        {"text": "Освобождение из тюрьмы", "action": "get_out_of_jail"},
-        {"text": "Оплатите счет за лечение $100", "action": "deduct_money", "value": 100},
+        {"text": "Вы выиграли конкурс 'молодёжные лица ГУАП'. Получите 20₽", "action": "add_money", "value": 20},
+        {"text": "Оплатите налог на образование 100₽", "action": "deduct_money", "value": 100},
+        {"text": "Вы выиграли стипендию профкома получите 100₽", "action": "add_money", "value": 100},
+        {"text": "Вы не понравились преподавателю. Отправляйтесь на комиссию. Не проходите через 'Старт'", "action": "go_to_jail"},
+        {"text": "ГУАП выдает вам мат.помощь получи 50₽", "action": "add_money", "value": 50},
+        {"text": "Вы выиграли грантовую поддержку получите 20₽", "action": "add_money", "value": 20},
+        {"text": "Освобождение от комиссии", "action": "get_out_of_jail"},
+        {"text": "Оплатите проживание в общежитии 100₽", "action": "deduct_money", "value": 100},
     ]
 
 
@@ -263,13 +263,15 @@ class Game:
         return self.players.get(current_id)
 
     def next_turn(self):
-        """Передать ход следующему игроку"""
+        """Передает ход следующему игроку"""
         if not self.player_order:
-            return
-        current_player = self.get_current_player()
+            return None
+
         self.current_player_index = (self.current_player_index + 1) % len(self.player_order)
-        self.double_count = 0
         self.turn_count += 1
+
+        # Возвращаем нового текущего игрока
+        return self.get_current_player()
 
     def roll_dice(self) -> Tuple[int, int, int]:
         """Бросить кубики"""

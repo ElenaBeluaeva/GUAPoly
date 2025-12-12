@@ -221,7 +221,6 @@ def get_manage_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔙 Назад к игре", callback_data="back_game_actions")]
     ]
     return InlineKeyboardMarkup(keyboard)
-
 def get_game_actions_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура игровых действий (День 2)"""
     keyboard = [

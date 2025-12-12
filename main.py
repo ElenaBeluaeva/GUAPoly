@@ -28,6 +28,7 @@ sys.path.insert(0, current_dir)  # корень проекта
 sys.path.insert(0, src_backend_dir)  # папка src/backend
 
 # Теперь импортируем
+
 from config import Config
 from src.backend.game import Game, GameState
 from src.backend.player import Player, PlayerStatus
@@ -68,12 +69,19 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Инициализация
 game_manager = GameManager()
 
+def escape_markdown(text: str) -> str:
+    """Экранирование для Markdown"""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    for char in escape_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
 def format_money(amount: int) -> str:
     """Форматирование денег"""
-    return f"${amount}"
+    return f"₽{amount}"
 
 
 def escape_markdown(text: str) -> str:
@@ -397,28 +405,22 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         game = game_manager.get_player_game(user.id)
 
         if not game:
-            await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+            await update.message.reply_text("❌ Вы не в игре!")
             return
 
         if game.state.value != "in_game":
-            await update.message.reply_text("❌ *Игра еще не началась!*", parse_mode="Markdown")
+            await update.message.reply_text("❌ Игра еще не началась!")
             return
 
         current_player = game.get_current_player()
         if not current_player:
-            await update.message.reply_text("❌ *Ошибка: текущий игрок не найден!*", parse_mode="Markdown")
+            await update.message.reply_text("❌ Ошибка: текущий игрок не найден!")
             return
 
         # Проверяем, чей сейчас ход
         if current_player.user_id != user.id:
-            mention = mention_player(
-                current_player.user_id,
-                current_player.username,
-                current_player.full_name
-            )
             await update.message.reply_text(
-                f"❌ *Сейчас не ваш ход!*\n\n🎯 Сейчас ходит: {mention}\n⏳ Ожидайте своей очереди",
-                parse_mode="Markdown"
+                f"❌ Сейчас не ваш ход!\n\n🎯 Сейчас ходит: {current_player.full_name}\n⏳ Ожидайте своей очереди"
             )
             return
 
@@ -432,8 +434,7 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
 
             await update.message.reply_text(
-                f"🔒 *Вы в тюрьме!*\n\nХод в тюрьме: {current_player.jail_turns + 1}/3\n\nВыберите действие:",
-                parse_mode="Markdown",
+                f"🔒 Вы в тюрьме!\n\nХод в тюрьме: {current_player.jail_turns + 1}/3\n\nВыберите действие:",
                 reply_markup=jail_keyboard
             )
             return
@@ -446,8 +447,7 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             game.double_count += 1
             if game.double_count >= 3:
                 await update.message.reply_text(
-                    f"🎲 *Выброшен третий дубль!*\n🎯 {dice1} + {dice2} = {total}\n\n🔒 Вы отправляетесь в тюрьму!",
-                    parse_mode="Markdown"
+                    f"🎲 Выброшен третий дубль!\n🎯 {dice1} + {dice2} = {total}\n\n🔒 Вы отправляетесь в тюрьму!"
                 )
                 current_player.go_to_jail()
                 game.next_turn()
@@ -471,64 +471,62 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_player.in_jail = True
             current_player.jail_turns = 0
 
-            # Безопасно формируем jail_response
-            player_name = escape_markdown(current_player.full_name)
-            jail_response = f"🎲 *{player_name} бросает кубики:*\n"
-            jail_response += f"🎯 {dice1} + {dice2} = *{total}*\n\n"
+            jail_response = f"{current_player.color if hasattr(current_player, 'color') else '🎲'} {current_player.full_name} бросает кубики:\n"
+            jail_response += f"🎯 {dice1} + {dice2} = {total}\n\n"
 
             if move_result.get("passed_start"):
-                jail_response += f"💰 *Прошли СТАРТ!* +${Config.SALARY}\n\n"
+                jail_response += f"💰 Прошли СТАРТ! +${Config.SALARY}\n\n"
 
-            jail_response += f"📍 *Перемещение:* {old_position} → {current_player.position}\n"
-            jail_response += f"💰 *Баланс:* ${current_player.money}\n\n"
+            jail_response += f"📍 Перемещение: {old_position} → {current_player.position}\n"
+            jail_response += f"💰 Баланс: ${current_player.money}\n\n"
 
-            cell_name = escape_markdown(cell.name) if cell else "Неизвестно"
-            jail_response += f"🏠 *Клетка {current_player.position}: {cell_name}*\n"
-            jail_response += f"\n🔒 *ВЫ ОТПРАВЛЕНЫ В ТЮРЬМУ!*\n"
+            cell_name = cell.name if cell else "Неизвестно"
+            jail_response += f"🏠 Клетка {current_player.position}: {cell_name}\n"
+            jail_response += f"\n🔒 ВЫ ОТПРАВЛЕНЫ В ТЮРЬМУ!\n"
             jail_response += f"📍 Позиция: Тюрьма (клетка 10)\n"
             jail_response += f"📅 Круг: 1/3\n\n"
             jail_response += f"🎮 В следующий ваш ход используйте:\n"
-            jail_response += f"• `/jail` - меню тюрьмы\n"
-            jail_response += f"• `/jail_pay` - заплатить ${Config.JAIL_FINE}\n"
-            jail_response += f"• `/jail_roll` - попытать удачу\n"
-            jail_response += f"• `/jail_card` - использовать карту\n\n"
+            jail_response += f"• /jail - меню тюрьмы\n"
+            jail_response += f"• /jail_pay - заплатить ${Config.JAIL_FINE}\n"
+            jail_response += f"• /jail_roll - попытать удачу\n"
+            jail_response += f"• /jail_card - использовать карту\n\n"
 
             # Передаем ход
             game.next_turn()
             next_player = game.get_current_player()
             if next_player:
-                next_name = escape_markdown(next_player.full_name)
-                jail_response += f"⏭️ *Следующий ход:* {next_player.color if hasattr(next_player, 'color') else '🎲'} {next_name}"
+                next_color = next_player.color if hasattr(next_player, 'color') else '🎲'
+                jail_response += f"⏭️ Ход переходит\n🎯 {next_color} {next_player.full_name}"
 
-            await update.message.reply_text(jail_response, parse_mode="Markdown")
+            await update.message.reply_text(jail_response)
             game_manager.save_game_state(game.game_id)
             return
 
-        # Формируем текстовое сообщение (БЕЗОПАСНО)
+        # Формируем текстовое сообщение
         response_lines = []
 
         # 1. Первая строка: имя игрока
-        player_name = escape_markdown(current_player.full_name)
+        player_name = current_player.full_name
         player_icon = current_player.color if hasattr(current_player, 'color') else '🎲'
-        response_lines.append(f"{player_icon} *{player_name} бросает кубики:*")
+        response_lines.append(f"{player_icon} {player_name} бросает кубики:")
 
         # 2. Результат броска
-        response_lines.append(f"🎯 {dice1} + {dice2} = *{total}*")
+        response_lines.append(f"🎯 {dice1} + {dice2} = {total}")
         response_lines.append("")
 
         # 3. Прошли старт
         if move_result.get("passed_start"):
-            response_lines.append(f"💰 *Прошли СТАРТ!* +${Config.SALARY}")
+            response_lines.append(f"💰 Прошли СТАРТ! +${Config.SALARY}")
             response_lines.append("")
 
         # 4. Перемещение и баланс
-        response_lines.append(f"📍 *Перемещение:* {old_position} → {current_player.position}")
-        response_lines.append(f"💰 *Баланс:* ${current_player.money}")
+        response_lines.append(f"📍 Перемещение: {old_position} → {current_player.position}")
+        response_lines.append(f"💰 Баланс: ${current_player.money}")
         response_lines.append("")
 
         # 5. Информация о клетке
-        cell_name = escape_markdown(cell.name) if cell else "Неизвестно"
-        response_lines.append(f"🏠 *Клетка {current_player.position}: {cell_name}*")
+        cell_name = cell.name if cell else "Неизвестно"
+        response_lines.append(f"🏠 Клетка {current_player.position}: {cell_name}")
 
         # Подготавливаем данные для отображения
         players_data = []
@@ -564,8 +562,16 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Кнопки для покупки
             price = cell.price if hasattr(cell, 'price') else 0
             response_lines.append("")
-            response_lines.append(f"🏷 *Эта собственность свободна!*")
-            response_lines.append(f"💵 Цена: ${price}")
+            response_lines.append("🏠 СОБСТВЕННОСТЬ СВОБОДНА!")
+            response_lines.append(f"🏷 {cell_name}")
+            response_lines.append(f"💵 Цена покупки: ${price}")
+            response_lines.append(f"💰 У вас: ${current_player.money}")
+            response_lines.append("")
+
+            if current_player.money >= price:
+                response_lines.append("✅ Достаточно средств для покупки!")
+            else:
+                response_lines.append("❌ Недостаточно средств!")
 
             # Сохраняем информацию о покупке в user_data
             context.user_data[f'buy_offer_{game.game_id}_{current_player.position}'] = {
@@ -573,6 +579,8 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'position': current_player.position,
                 'player_id': user.id,
                 'price': price,
+                'cell_name': cell_name,
+                'player_name': player_name,
                 'double': (dice1 == dice2),
                 'timestamp': datetime.now()
             }
@@ -581,66 +589,85 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton(f"✅ Купить за ${price}",
                                       callback_data=f"buy_{game.game_id}_{current_player.position}"),
                  InlineKeyboardButton("❌ Пропустить",
-                                      callback_data=f"skip_{game.game_id}_{current_player.position}")],
-                [InlineKeyboardButton("🎰 Начать аукцион",
-                                      callback_data=f"auction_{game.game_id}_{current_player.position}")]
+                                      callback_data=f"skip_{game.game_id}_{current_player.position}")]
             ])
 
+
         elif cell_action["action"] == "pay_rent":
+
             rent = cell_action.get("rent", 0)
+
             owner_id = cell_action.get("owner_id")
+
             owner = game.players.get(owner_id) if owner_id else None
 
             if owner:
+
                 response_lines.append("")
-                response_lines.append(f"💸 *Чужая собственность!*")
-                owner_name = escape_markdown(owner.full_name)
-                response_lines.append(f"👤 Владелец: {owner_name}")
+
+                response_lines.append("💸 Чужая собственность!")
+
+                response_lines.append(f"👤 Владелец: {owner.full_name}")
+
                 response_lines.append(f"💰 Рента: ${rent}")
 
                 # Автоматически списываем ренту
+
                 if current_player.deduct_money(rent):
+
                     owner.add_money(rent)
-                    response_lines.append(f"✅ Рента уплачена")
+
+                    response_lines.append("✅ Рента уплачена")
+
                 else:
-                    response_lines.append(f"❌ Недостаточно средств!")
+
+                    response_lines.append("❌ Недостаточно средств!")
+
                     current_player.status = "bankrupt"
 
-            # После оплаты ренты сразу передаем ход
+            # ПЕРЕДАЧА ХОДА БЕЗ КНОПКИ
+
             if dice1 != dice2:
                 game.next_turn()
+                next_player = game.get_current_player()
+                if next_player:
+                    response_lines.append("")
+                    response_lines.append(f"⏭️ Ход переходит")
+                    response_lines.append(
+                        f"🎯 {next_player.color if hasattr(next_player, 'color') else '🎲'} {next_player.full_name}")
+            else:
+                response_lines.append("")
+                response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
-            ])
+            # НЕ создаем клавиатуру - передача автоматическая
+
+            keyboard = None
+
 
         elif cell_action["action"] == "pay_tax":
             tax = cell_action.get("amount", 0)
-            response_lines.append("")
-            response_lines.append(f"💸 *Налог:* ${tax}")
-
+            response_lines.append
+            response_lines.append(f"💸 Налог: ${tax}")
             if current_player.deduct_money(tax):
                 game.free_parking_pot += tax
-                response_lines.append(f"✅ Налог уплачен")
+                response_lines.append("✅ Налог уплачен")
             else:
-                response_lines.append(f"❌ Недостаточно средств!")
-
-            # После уплаты налога сразу передаем ход
+                response_lines.append("❌ Недостаточно средств!")
+            # ПЕРЕДАЧА ХОДА БЕЗ КНОПКИ
             if dice1 != dice2:
                 game.next_turn()
+                next_player = game.get_current_player()
+                if next_player:
+                    response_lines.append("")
+                    response_lines.append(f"⏭️ Ход переходит")
+                    response_lines.append(
+                        f"🎯 {next_player.color if hasattr(next_player, 'color') else '🎲'} {next_player.full_name}")
+            else:
+                response_lines.append("")
+                response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
+            # НЕ создаем клавиатуру
+            keyboard = None
 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
-            ])
-
-        elif cell_action["action"] == "go_to_jail":
-            current_player.go_to_jail()
-            response_lines.append("")
-            response_lines.append(f"🔒 *Отправлены в тюрьму!*")
-
-            # Переход хода
-            game.next_turn()
-            await notify_next_player(game, context, current_player.user_id)
 
         elif cell_action["action"] == "free_parking":
             response_lines.append("")
@@ -648,80 +675,94 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 amount = game.free_parking_pot
                 current_player.add_money(amount)
                 game.free_parking_pot = 0
-                response_lines.append(f"🎉 *Бесплатная стоянка!*")
+                response_lines.append("🎉 Бесплатная стоянка!")
                 response_lines.append(f"💰 Вы получаете: ${amount}")
             else:
-                response_lines.append(f"🅿️ *Бесплатная стоянка*")
-                response_lines.append(f"💰 В банке: $0")
-
-            # После бесплатной стоянки сразу передаем ход
+                response_lines.append("🅿️ Бесплатная стоянка")
+                response_lines.append("💰 В банке: $0")
+            # ПЕРЕДАЧА ХОДА БЕЗ КНОПКИ
             if dice1 != dice2:
                 game.next_turn()
+                next_player = game.get_current_player()
+                if next_player:
+                    response_lines.append("")
+                    response_lines.append(f"⏭️ Ход переходит")
+                    response_lines.append(
+                        f"🎯 {next_player.color if hasattr(next_player, 'color') else '🎲'} {next_player.full_name}")
+            else:
+                response_lines.append("")
+                response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
+            # НЕ создаем клавиатуру
+            keyboard = None
 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
-            ])
+
 
         elif cell_action["action"] in ["chance_card", "chest_card"]:
             card = cell_action.get("card")
             if card:
                 response_lines.append("")
-                card_text = escape_markdown(card.get('text', ''))
-                response_lines.append(f"🎯 *{card_text}*")
-
+                card_text = card.get('text', '')
+                response_lines.append(f"🎯 {card_text}")
                 # Применяем действие карты
                 card_result = game.apply_card_action(current_player, card)
                 if card_result.get("message"):
-                    card_msg = escape_markdown(card_result['message'])
+                    card_msg = card_result['message']
                     response_lines.append(f"📝 {card_msg}")
-
-            # После карты сразу передаем ход
+            # ПЕРЕДАЧА ХОДА БЕЗ КНОПКИ
             if dice1 != dice2:
                 game.next_turn()
+                next_player = game.get_current_player()
+                if next_player:
+                    response_lines.append("")
+                    response_lines.append(f"⏭️ Ход переходит")
+                    response_lines.append(
+                        f"🎯 {next_player.color if hasattr(next_player, 'color') else '🎲'} {next_player.full_name}")
+            else:
+                response_lines.append("")
+                response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
+            # НЕ создаем клавиатуру
+            keyboard = None
 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
-            ])
 
         else:
             # Для остальных действий
             if dice1 != dice2:
                 game.next_turn()
-
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➡️ Передать ход", callback_data=f"pass_turn_{game.game_id}")]
-            ])
-
-        # Создаем изображение
+                next_player = game.get_current_player()
+                if next_player:
+                    response_lines.append("")
+                    response_lines.append(f"⏭️ Ход переходит")
+                    response_lines.append(
+                        f"🎯 {next_player.color if hasattr(next_player, 'color') else '🎲'} {next_player.full_name}")
+            else:
+                response_lines.append("")
+                response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
+            # НЕ создаем клавиатуру
+            keyboard = None
+        # Создаем текстовое сообщение
         text_message = "\n".join(response_lines)
-        player_color = getattr(current_player, 'color', '🔴')
-
-        # Отладочный вывод перед отправкой
-        print(f"=== DEBUG: Текст для отправки ===")
-        print(text_message[:500])
-        print(f"=== Конец отладки ===")
 
         try:
-            combined_bytes = get_combined_board_bytes(game_data, text_message, player_color)
+            # Создаем изображение игрового поля БЕЗ текста
+            board_image = board_renderer.render_board(game_data)
+            img_bytes = board_renderer.save_to_bytes(board_image)
 
-            # Отправляем изображение с кнопками
+            # Отправляем изображение с текстом как подпись
             if keyboard:
                 await update.message.reply_photo(
-                    photo=combined_bytes,
+                    photo=img_bytes,
                     caption=text_message[:1024],
-                    parse_mode="Markdown",
                     reply_markup=keyboard
                 )
             else:
                 await update.message.reply_photo(
-                    photo=combined_bytes,
-                    caption=text_message[:1024],
-                    parse_mode="Markdown"
+                    photo=img_bytes,
+                    caption=text_message[:1024]
                 )
 
         except Exception as e:
             print(f"❌ Ошибка создания изображения: {e}")
-            # Отправляем только текст с кнопками (БЕЗ parse_mode для теста)
+            # Запасной вариант
             if keyboard:
                 await update.message.reply_text(text_message, reply_markup=keyboard)
             else:
@@ -744,37 +785,6 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-async def notify_next_player(game, context, current_user_id=None):
-    """Уведомляет следующего игрока о его ходе"""
-    next_player = game.get_current_player()
-
-    if next_player and (not current_user_id or next_player.user_id != current_user_id):
-        mention = mention_player(
-            next_player.user_id,
-            next_player.username,
-            next_player.full_name
-        )
-
-        try:
-            # Отправляем в личку
-            #await context.bot.send_message(
-               # chat_id=next_player.user_id,
-              #  text=f"🎯 *Ваш ход, {next_player.full_name}!*\n\n"
-                #     f"Используйте /roll для броска кубиков",
-               # parse_mode="Markdown",
-               # reply_markup=get_game_actions_keyboard()
-          #  )
-
-            # Также можно отправить в общий чат
-            await context.bot.send_message(
-                chat_id=game.game_id,  # если есть ID чата
-                text=f"🎯 *Следующий ход: {mention}!*\n\n"
-                     f"Используйте /roll для броска кубиков",
-                parse_mode="Markdown"
-             )
-
-        except Exception as e:
-            logger.error(f"Не удалось уведомить игрока {next_player.user_id}: {e}")
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для покупки собственности с отображением на поле"""
@@ -787,18 +797,14 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not buy_offer:
             await update.message.reply_text(
-                "❌ *Нет активного предложения покупки!*\n\n"
-                "Используйте /buy только когда вам предложили купить собственность.",
-                parse_mode="Markdown"
+                "❌ Нет активного предложения покупки!\n\n"
+                "Используйте /buy только когда вам предложили купить собственность."
             )
             return
 
         # Проверяем, что предложение для этого игрока
         if buy_offer.get('player_id') != user.id:
-            await update.message.reply_text(
-                "❌ *Это предложение покупки не для вас!*",
-                parse_mode="Markdown"
-            )
+            await update.message.reply_text("❌ Это предложение покупки не для вас!")
             return
 
         # Получаем игру
@@ -849,49 +855,132 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cell_name = cell.name if cell else "недвижимость"
 
         if success:
-            # Формируем сообщение об успешной покупке
+            # Формируем сообщение об успешной покупке с ДОПОЛНИТЕЛЬНЫМ ТЕКСТОМ
             text_lines = []
-            text_lines.append(f"✅ *ПОКУПКА ОФОРМЛЕНА!*")
+            text_lines.append("✅ ПОКУПКА ОФОРМЛЕНА!")
             text_lines.append("")
-            text_lines.append(f"🏠 Вы купили *{cell_name}*")
-            text_lines.append(f"💸 Потрачено: *${cell.price if hasattr(cell, 'price') else 0}*")
-            text_lines.append(f"💰 Остаток: *${player.money}*")
+            text_lines.append(f"🏠 Вы купили {cell_name}")
+            text_lines.append(f"💰 Потрачено: ${cell.price if hasattr(cell, 'price') else 0}")
+            text_lines.append(f"🏦 Остаток: ${player.money}")
             text_lines.append("")
 
-            # Создаем совмещенное изображение
+            # Считаем количество собственности
+            properties_count = len(getattr(player, 'properties', []))
+            stations_count = len(getattr(player, 'stations', []))
+            utilities_count = len(getattr(player, 'utilities', []))
+
+            text_lines.append("🎲 Теперь у вас:")
+            text_lines.append(f"• Улиц: {properties_count}")
+            text_lines.append(f"• Вокзалов: {stations_count}")
+            text_lines.append(f"• Предприятий: {utilities_count}")
+            text_lines.append("")
+
+            # ДОБАВЛЯЕМ НОВЫЙ ТЕКСТ - информация о клетке
+            text_lines.append("📊 Информация о купленной собственности:")
+
+            # Добавляем информацию о типе клетки
+            if cell.type == CellType.PROPERTY:
+                text_lines.append(f"🏘 Тип: Улица")
+                if hasattr(cell, 'color_group'):
+                    text_lines.append(f"🎨 Цвет: {cell.color_group}")
+                if hasattr(cell, 'rent'):
+                    text_lines.append(f"💵 Базовая рента: ${cell.rent}")
+                    if hasattr(cell, 'rent_with_houses'):
+                        text_lines.append(f"🏠 Рента с домами:")
+                        for i in range(1, 5):
+                            text_lines.append(f"   • {i} дом: ${cell.rent_with_houses[i - 1]}")
+                        if hasattr(cell, 'rent_with_hotel'):
+                            text_lines.append(f"   • 🏨 Отель: ${cell.rent_with_hotel}")
+            elif cell.type == CellType.STATION:
+                text_lines.append(f"🚂 Тип: Вокзал")
+                if hasattr(cell, 'rent'):
+                    text_lines.append(f"💵 Базовая рента: ${cell.rent}")
+                    if hasattr(cell, 'rent_multipliers'):
+                        text_lines.append(f"📈 Множители ренты:")
+                        for i, multiplier in enumerate(cell.rent_multipliers, 1):
+                            text_lines.append(f"   • {i} вокзал: ×{multiplier}")
+            elif cell.type == CellType.UTILITY:
+                text_lines.append(f"⚡ Тип: Предприятие")
+                text_lines.append(f"🎲 Рента зависит от броска кубиков")
+                if hasattr(cell, 'rent_multipliers'):
+                    text_lines.append(f"📊 Множители:")
+                    text_lines.append(f"   • 1 предприятие: ×{cell.rent_multipliers[0]}")
+                    text_lines.append(f"   • 2 предприятия: ×{cell.rent_multipliers[1]}")
+
+            text_lines.append("")
+
+            # Добавляем советы
+            text_lines.append("💡 Советы по управлению:")
+            if cell.type == CellType.PROPERTY:
+                # Проверяем, есть ли у игрока другие улицы того же цвета
+                color_group_cells = [c for c in game.board.cells
+                                     if hasattr(c, 'color_group')
+                                     and c.color_group == cell.color_group]
+                player_owns_in_group = sum(1 for c in color_group_cells
+                                           if hasattr(c, 'owner_id')
+                                           and c.owner_id == player.user_id)
+                total_in_group = len(color_group_cells)
+
+                text_lines.append(f"• Эта улица - часть группы {cell.color_group}")
+                text_lines.append(f"• У вас {player_owns_in_group} из {total_in_group} улиц в этой группе")
+
+                if player_owns_in_group == total_in_group:
+                    text_lines.append("🎉 Вы собрали всю цветовую группу!")
+                    text_lines.append("🏗️ Теперь можете строить дома!")
+                else:
+                    text_lines.append(f"📝 Для постройки домов нужно собрать все {total_in_group} улицы")
+
+            elif cell.type == CellType.STATION:
+                text_lines.append("• Каждый дополнительный вокзал увеличивает ренту")
+                text_lines.append("• Старайтесь покупать все 4 вокзала для максимальной прибыли")
+
+            elif cell.type == CellType.UTILITY:
+                text_lines.append("• Рента зависит от суммы на кубиках")
+                text_lines.append("• Владейте обоими предприятиями для увеличения дохода")
+
+            text_lines.append("")
+            text_lines.append("🎮 Что дальше:")
+            if buy_offer.get('double'):
+                text_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
+            else:
+                text_lines.append("⏭️ Ход переходит следующему игроку")
+
+            # Создаем изображение
             text_message = "\n".join(text_lines)
-            player_color = getattr(player, 'color', '🔴')
-
-            combined_bytes = get_combined_board_bytes(
-                game_data,
-                text_message,
-                player_color
-            )
+            board_image = board_renderer.render_board(game_data)
+            img_bytes = board_renderer.save_to_bytes(board_image)
 
             # Отправляем изображение с результатом покупки
             await update.message.reply_photo(
-                photo=combined_bytes,
-                caption=text_message[:1024],
-                parse_mode="Markdown"
+                photo=img_bytes,
+                caption=text_message[:1024]  # Ограничение Telegram для подписи
             )
+
+            # Если текст слишком длинный, отправляем остальное отдельным сообщением
+            if len(text_message) > 1024:
+                remaining_text = text_message[1024:]
+                # Разбиваем на части по 4000 символов (ограничение Telegram)
+                for i in range(0, len(remaining_text), 4000):
+                    await update.message.reply_text(remaining_text[i:i + 4000])
 
             # Уведомляем других игроков
             for other_id, other_player in game.players.items():
                 if other_id != user.id:
                     try:
-                        # Для других игроков тоже отправляем изображение
-                        other_text = f"🏠 *{player.full_name} купил(а) {cell_name}!*"
-                        other_combined_bytes = get_combined_board_bytes(
-                            game_data,
-                            other_text,
-                            getattr(other_player, 'color', '🔴')
-                        )
+                        other_text = f"🏠 {player.full_name} купил(а) {cell_name}!"
+
+                        # Добавляем дополнительную информацию для других игроков
+                        if cell.type == CellType.PROPERTY and hasattr(cell, 'color_group'):
+                            other_text += f"\n🎨 Группа: {cell.color_group}"
+                        other_text += f"\n💰 Цена: ${cell.price if hasattr(cell, 'price') else 0}"
+
+                        other_board_image = board_renderer.render_board(game_data)
+                        other_img_bytes = board_renderer.save_to_bytes(other_board_image)
 
                         await context.bot.send_photo(
                             chat_id=other_id,
-                            photo=other_combined_bytes,
-                            caption=other_text,
-                            parse_mode="Markdown"
+                            photo=other_img_bytes,
+                            caption=other_text
                         )
                     except Exception as e:
                         print(f"❌ Не удалось уведомить игрока {other_id}: {e}")
@@ -904,37 +993,31 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if next_player:
                     try:
                         # Уведомляем следующего игрока с изображением
-                        next_text = f"🎯 *Ваш ход!*\n\nИспользуйте `/roll`"
-                        next_game_data = game_data.copy()
-
-                        next_combined_bytes = get_combined_board_bytes(
-                            next_game_data,
-                            next_text,
-                            getattr(next_player, 'color', '🔴')
-                        )
+                        next_text = f"🎯 Ваш ход!\n\nИспользуйте /roll"
+                        next_board_image = board_renderer.render_board(game_data)
+                        next_img_bytes = board_renderer.save_to_bytes(next_board_image)
 
                         await context.bot.send_photo(
                             chat_id=next_player.user_id,
-                            photo=next_combined_bytes,
-                            caption=next_text,
-                            parse_mode="Markdown"
+                            photo=next_img_bytes,
+                            caption=next_text
                         )
                     except Exception as e:
                         print(f"❌ Не удалось уведомить следующего игрока: {e}")
+
+                    # Добавляем сообщение о передаче хода текущему игроку
+                    transfer_text = f"⏭️ Ход переходит\n🎯 {next_player.color if hasattr(next_player, 'color') else '🎲'} {next_player.full_name}"
+                    await update.message.reply_text(transfer_text)
             else:
                 # При дубле игрок ходит еще раз
-                double_text = f"🎲 *ДУБЛЬ!*\n🎯 Ходите еще раз!\n\nИспользуйте `/roll`"
-                double_combined_bytes = get_combined_board_bytes(
-                    game_data,
-                    double_text,
-                    player_color
-                )
+                double_text = f"🎲 ДУБЛЬ!\n🎯 Ходите еще раз!\n\nИспользуйте /roll"
+                double_board_image = board_renderer.render_board(game_data)
+                double_img_bytes = board_renderer.save_to_bytes(double_board_image)
 
                 await context.bot.send_photo(
                     chat_id=user.id,
-                    photo=double_combined_bytes,
-                    caption=double_text,
-                    parse_mode="Markdown"
+                    photo=double_img_bytes,
+                    caption=double_text
                 )
 
             print(f"=== BUY COMMAND FINISHED SUCCESS ===")
@@ -942,28 +1025,24 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             # Покупка не удалась
             text_lines = []
-            text_lines.append(f"❌ *НЕ УДАЛОСЬ КУПИТЬ!*")
+            text_lines.append("❌ НЕ УДАЛОСЬ КУПИТЬ!")
             text_lines.append("")
-            text_lines.append(f"🏠 *{cell_name}*")
+            text_lines.append(f"🏠 {cell_name}")
             text_lines.append("")
-            text_lines.append("📋 *Возможные причины:*")
+            text_lines.append("📋 Возможные причины:")
             text_lines.append("1. Недостаточно денег")
             text_lines.append("2. Собственность уже куплена")
             text_lines.append("3. Ошибка системы")
 
             text_message = "\n".join(text_lines)
-            player_color = getattr(player, 'color', '🔴')
 
-            combined_bytes = get_combined_board_bytes(
-                game_data,
-                text_message,
-                player_color
-            )
+            # Создаем изображение для неудачной покупки
+            board_image = board_renderer.render_board(game_data)
+            img_bytes = board_renderer.save_to_bytes(board_image)
 
             await update.message.reply_photo(
-                photo=combined_bytes,
-                caption=text_message[:1024],
-                parse_mode="Markdown"
+                photo=img_bytes,
+                caption=text_message[:1024]
             )
 
         # Сохраняем игру
@@ -977,34 +1056,78 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def notify_next_player(game, context, current_user_id=None):
-    """Уведомляет следующего игрока о его ходе"""
+    """Уведомляет следующего игрока о его ходе - БЕЗ Markdown"""
     next_player = game.get_current_player()
 
-    if next_player and (not current_user_id or next_player.user_id != current_user_id):
-        mention = mention_player(
-            next_player.user_id,
-            next_player.username,
-            next_player.full_name
-        )
+    if not next_player:
+        print("⚠️ Следующий игрок не найден")
+        return
 
+    # Проверяем, что это не тот же игрок (при дубле)
+    if current_user_id and next_player.user_id == current_user_id:
+        print(f"⚠️ Next player is the same ({next_player.full_name}), skipping notification")
+        return  # Не уведомляем того же игрока
+
+    print(f"📨 Отправляем уведомление игроку {next_player.full_name} (ID: {next_player.user_id})")
+
+    # Подготавливаем данные для изображения
+    players_data = []
+    properties_data = {}
+
+    for player_id, player in game.players.items():
+        players_data.append({
+            "id": player_id,
+            "name": player.full_name,
+            "position": player.position,
+            "color": getattr(player, 'color', '🔴'),
+            "money": player.money
+        })
+
+    # Собираем информацию о собственности
+    for cell in game.board.cells:
+        if hasattr(cell, 'owner_id') and cell.owner_id:
+            properties_data[cell.id] = {
+                "owner": cell.owner_id,
+                "houses": getattr(cell, 'houses', 0),
+                "hotel": getattr(cell, 'hotel', False)
+            }
+
+    game_data = {
+        "players": players_data,
+        "properties": properties_data
+    }
+
+    try:
+        # Создаем изображение игрового поля
+        board_image = board_renderer.render_board(game_data)
+        img_bytes = board_renderer.save_to_bytes(board_image)
+
+        # Отправляем личное сообщение с изображением
+        next_player_color = next_player.color if hasattr(next_player, 'color') else '🎲'
+        caption = f"🎯 ВАШ ХОД, {next_player.full_name}!\n\n"
+        caption += f"📊 Игроков: {len(game.players)}\n"
+        caption += f"💰 Ваш баланс: ${next_player.money}\n\n"
+        caption += f"Используйте /roll чтобы бросить кубики"
+
+        await context.bot.send_photo(
+            chat_id=next_player.user_id,
+            photo=img_bytes,
+            caption=caption
+        )
+        print(f"✅ Уведомление с изображением отправлено игроку {next_player.full_name}")
+
+    except Exception as e:
+        print(f"❌ Не удалось отправить уведомление с изображением игроку {next_player.user_id}: {e}")
+
+        # Запасной вариант - текстовое сообщение
         try:
             await context.bot.send_message(
-                chat_id=next_player.user_id,  # или ID группового чата
-                text=f"🎯 *Ваш ход, {mention}!*\n\n"
-                     f"Используйте /roll для броска кубиков",
-                parse_mode="Markdown"
+                chat_id=next_player.user_id,
+                text=f"🎯 Ваш ход, {next_player.full_name}!\n\nИспользуйте /roll для броска кубиков"
             )
-        except Exception as e:
-            logger.error(f"Не удалось уведомить игрока {next_player.user_id}: {e}")
-
-            # Альтернативный вариант - отправка в общий чат
-            if game.game_id:  # если игра ведется в групповом чате
-                await context.bot.send_message(
-                    chat_id=game.game_id,
-                    text=f"🎯 *Следующий ход: {next_player.full_name}!*\n\n"
-                         f"Используйте /roll для броска кубиков",
-                    parse_mode="Markdown"
-                )
+            print(f"✅ Текстовое уведомление отправлено игроку {next_player.full_name}")
+        except Exception as e2:
+            print(f"❌ Не удалось отправить текстовое уведомление: {e2}")
 
 async def send_combined_game_board(update: Update, context: ContextTypes.DEFAULT_TYPE,
                                    game, caption: str = "🎮 Текущее состояние игры",
@@ -1063,6 +1186,7 @@ async def send_combined_game_board(update: Update, context: ContextTypes.DEFAULT
         traceback.print_exc()
         return False
 
+
 async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для пропуска покупки"""
     try:
@@ -1074,18 +1198,14 @@ async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not buy_offer:
             await update.message.reply_text(
-                "❌ *Нет активного предложения покупки!*\n\n"
-                "Используйте /skip только когда вам предложили купить собственность.",
-                parse_mode="Markdown"
+                "❌ Нет активного предложения покупки!\n\n"
+                "Используйте /skip только когда вам предложили купить собственность."
             )
             return
 
         # Проверяем, что предложение для этого игрока
         if buy_offer.get('player_id') != user.id:
-            await update.message.reply_text(
-                "❌ *Это предложение покупки не для вас!*",
-                parse_mode="Markdown"
-            )
+            await update.message.reply_text("❌ Это предложение покупки не для вас!")
             return
 
         # Получаем игру
@@ -1104,35 +1224,46 @@ async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Очищаем предложение покупки
         context.user_data.pop('buy_offer', None)
 
-        # Уведомление о пропуске
-        response = f"⏭️ *ПОКУПКА ПРОПУЩЕНА*\n\n"
-        response += f"🏠 Вы отказались от *{cell.name if cell else 'недвижимости'}*\n"
-        response += f"💰 Цена: ${cell.price if hasattr(cell, 'price') else 0}\n"
-        response += f"🏦 Ваш баланс: *${player.money}*"
+        # Формируем текст уведомления
+        response_lines = []
+        response_lines.append("⏭️ ПОКУПКА ПРОПУЩЕНА")
+        response_lines.append("")
+        response_lines.append(f"🏠 Вы отказались от {cell.name if cell else 'недвижимости'}")
+        response_lines.append(f"💰 Цена: ${cell.price if hasattr(cell, 'price') else 0}")
+        response_lines.append(f"🏦 Ваш баланс: ${player.money}")
 
         # Проверяем дубль
         if buy_offer.get('double'):
-            response += f"\n\n🎲 *ДУБЛЬ!*\n"
-            response += f"🎯 Ходите еще раз!\n\n"
-            response += f"Используйте `/roll`"
-            # Не передаем ход при дубле
+            response_lines.append("")
+            response_lines.append("🎲 ДУБЛЬ!")
+            response_lines.append("🎯 Ходите еще раз!")
+            response_lines.append("")
+            response_lines.append("Используйте /roll")
+            # При дубле НЕ передаем ход
         else:
-            # Переход хода
+            # Переход хода ТОЛЬКО если не дубль
             game.next_turn()
             next_player = game.get_current_player()
-            response += f"\n\n⏭️ *Ход переходит*\n"
-            response += f"🎯 {next_player.full_name}"
+
+            response_lines.append("")
+            response_lines.append("⏭️ Ход переходит")
+            response_lines.append(
+                f"🎯 {next_player.color if hasattr(next_player, 'color') else '🎲'} {next_player.full_name}")
 
             # Уведомляем следующего игрока
-            try:
-                await context.bot.send_message(
-                    chat_id=next_player.user_id,
-                    text=f"🎯 *Ваш ход!*\n\nИспользуйте `/roll`"
-                )
-            except:
-                pass
+            if next_player and next_player.user_id != user.id:  # Проверяем, что это не тот же игрок
+                try:
+                    await context.bot.send_message(
+                        chat_id=next_player.user_id,
+                        text=f"🎯 Ваш ход!\n\nИспользуйте /roll"
+                    )
+                except Exception as e:
+                    print(f"❌ Не удалось уведомить следующего игрока: {e}")
 
-        await update.message.reply_text(response, parse_mode="Markdown")
+        text_message = "\n".join(response_lines)
+
+        # Отправляем сообщение
+        await update.message.reply_text(text_message)
 
         # Сохраняем игру
         game_manager.save_game_state(game.game_id)
@@ -1144,7 +1275,6 @@ async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         import traceback
         traceback.print_exc()
         await update.message.reply_text(f"❌ Ошибка при пропуске: {str(e)}")
-
 
 async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик /leave"""
@@ -1292,6 +1422,53 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
 
     try:
+        # Проверяем, относится ли кнопка к игровым действиям
+        if any(data.startswith(prefix) for prefix in ["buy_", "skip_", "pass_turn_", "jail_"]):
+            # Получаем game_id из callback_data
+            game_id = None
+            if data.startswith("buy_") or data.startswith("skip_") or data.startswith("pass_turn_"):
+                parts = data.split("_")
+                if len(parts) >= 2:
+                    game_id = parts[1]
+            elif data.startswith("jail_"):
+                parts = data.split("_")
+                if len(parts) >= 3:  # jail_roll_GAME_ID или jail_pay_GAME_ID
+                    game_id = parts[2]
+                else:
+                    await query.answer("❌ Неверный формат callback_data", show_alert=True)
+                    return
+
+            if not game_id:
+                await query.answer("❌ Не удалось определить игру", show_alert=True)
+                return
+
+            # Получаем игру
+            game = game_manager.get_game(game_id)
+            if not game:
+                await query.answer("❌ Игра не найдена", show_alert=True)
+                return
+
+            # Проверяем, что пользователь в этой игре
+            player = game.players.get(user.id)
+            if not player:
+                await query.answer("❌ Вы не в этой игре", show_alert=True)
+                return
+
+            # Проверяем, чей сейчас ход
+            current_player = game.get_current_player()
+            if not current_player:
+                await query.answer("❌ Нет текущего игрока", show_alert=True)
+                return
+
+            # Проверяем, что кнопку нажимает игрок, чей сейчас ход
+            if current_player.user_id != user.id:
+                current_player_name = current_player.full_name
+                await query.answer(
+                    f"⏳ Сейчас ходит {current_player_name}! Ждите своей очереди.",
+                    show_alert=True
+                )
+                return
+
         # Обработка кнопки "Купить"
         if data.startswith("buy_"):
             parts = data.split("_")
@@ -1307,6 +1484,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 player = game.players.get(user.id)
                 if not player:
                     await query.answer("❌ Вы не в этой игре", show_alert=True)
+                    return
+
+                # Дополнительная проверка на текущего игрока (уже проверено выше, но для надежности)
+                current_player = game.get_current_player()
+                if current_player and current_player.user_id != user.id:
+                    await query.answer(f"❌ Сейчас ходит {current_player.full_name}!", show_alert=True)
                     return
 
                 cell = game.board.get_cell(position)
@@ -1333,14 +1516,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     key = f'buy_offer_{game_id}_{position}'
                     context.user_data.pop(key, None)
 
-                    # Обновляем сообщение
-                    await query.edit_message_caption(
-                        caption=f"✅ {player.full_name} купил(а) {cell.name} за ${price}!\n\n"
-                                f"💰 Баланс: ${player.money}",
-                        parse_mode="Markdown",
-                        reply_markup=None
-                    )
-
                     # Проверяем дубль
                     double = False
                     buy_offer_key = f'buy_offer_{game_id}_{position}'
@@ -1348,16 +1523,61 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         double = context.user_data[buy_offer_key].get('double', False)
                         context.user_data.pop(buy_offer_key, None)
 
+                    # Формируем основной текст
+                    text_lines = []
+                    text_lines.append(f"✅ {player.full_name} купил(а) {cell.name} за ${price}!")
+                    text_lines.append("")
+                    text_lines.append(f"💰 Баланс: ${player.money}")
+                    text_lines.append("")
+
+                    # Считаем количество собственности
+                    properties_count = len(getattr(player, 'properties', []))
+                    stations_count = len(getattr(player, 'stations', []))
+                    utilities_count = len(getattr(player, 'utilities', []))
+
+                    text_lines.append("🎲 Теперь у вас:")
+                    text_lines.append(f"• Улиц: {properties_count}")
+                    text_lines.append(f"• Вокзалов: {stations_count}")
+                    text_lines.append(f"• Предприятий: {utilities_count}")
+                    text_lines.append("")
+
                     if not double:
                         # Переход хода
                         game.next_turn()
-                        await notify_next_player(game, context, user.id)
+
+                        # Получаем следующего игрока
+                        next_player = game.get_current_player()
+                        if next_player:
+                            text_lines.append(f"⏭️ Ход переходит")
+                            text_lines.append(f"🎯 {next_player.full_name}")
+
                     else:
                         # При дубле игрок ходит еще раз
+                        text_lines.append("🎲 ДУБЛЬ!")
+                        text_lines.append("🎯 Ходите еще раз!")
+                        text_lines.append("")
+                        text_lines.append("Используйте /roll")
+
+                    # Объединяем все строки
+                    final_response = "\n".join(text_lines)
+
+                    # Обновляем сообщение
+                    await query.edit_message_caption(
+                        caption=final_response,
+                        parse_mode=None,
+                        reply_markup=None
+                    )
+
+                    if not double:
+                        # Уведомляем следующего игрока
+                        next_player = game.get_current_player()
+                        if next_player:
+                            await notify_next_player(game, context, user.id)
+                    else:
+                        # При дубле отправляем сообщение игроку
                         await context.bot.send_message(
                             chat_id=user.id,
-                            text=f"🎲 *ДУБЛЬ!*\n🎯 Ходите еще раз!\n\nИспользуйте `/roll`",
-                            parse_mode="Markdown"
+                            text=f"🎲 ДУБЛЬ!\n🎯 Ходите еще раз!\n\nИспользуйте /roll"
                         )
 
                     game_manager.save_game_state(game_id)
@@ -1366,15 +1586,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     for other_id, other_player in game.players.items():
                         if other_id != user.id:
                             try:
-                                mention = mention_player(
-                                    user.id,
-                                    user.username,
-                                    user.full_name
-                                )
+                                next_player_info = ""
+                                if not double:
+                                    next_player = game.get_current_player()
+                                    if next_player:
+                                        next_player_info = f"\n⏭️ Следующий ход: {next_player.full_name}"
+
                                 await context.bot.send_message(
                                     chat_id=other_id,
-                                    text=f"🏠 *{player.full_name} купил(а) {cell.name}!*",
-                                    parse_mode="Markdown"
+                                    text=f"🏠 {player.full_name} купил(а) {cell.name} за ${price}!\n"
+                                         f"💰 Баланс игрока: ${player.money}"
+                                         f"{next_player_info}"
                                 )
                             except Exception as e:
                                 print(f"❌ Не удалось уведомить игрока {other_id}: {e}")
@@ -1408,13 +1630,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 key = f'buy_offer_{game_id}_{position}'
                 context.user_data.pop(key, None)
 
-                # Обновляем сообщение
-                await query.edit_message_caption(
-                    caption=f"⏭️ {player.full_name} пропустил(а) покупку {cell.name}",
-                    parse_mode="Markdown",
-                    reply_markup=None
-                )
-
                 # Проверяем дубль
                 double = False
                 buy_offer_key = f'buy_offer_{game_id}_{position}'
@@ -1422,180 +1637,309 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     double = context.user_data[buy_offer_key].get('double', False)
                     context.user_data.pop(buy_offer_key, None)
 
+                # Формируем текст
+                text_lines = []
+                text_lines.append(f"⏭️ {player.full_name} пропустил(а) покупку {cell.name}")
+                text_lines.append("")
+                text_lines.append(f"💵 Цена: ${cell.price if hasattr(cell, 'price') else 0}")
+                text_lines.append(f"💰 Ваш баланс: ${player.money}")
+                text_lines.append("")
+
                 if not double:
-                    # Переход хода
+                    # Переход хода ТОЛЬКО если не дубль
                     game.next_turn()
-                    await notify_next_player(game, context, user.id)
+
+                    # Получаем следующего игрока
+                    next_player = game.get_current_player()
+                    if next_player:
+                        text_lines.append(f"⏭️ Ход переходит")
+                        text_lines.append(f"🎯 {next_player.full_name}")
+
                 else:
                     # При дубле игрок ходит еще раз
+                    text_lines.append("🎲 ДУБЛЬ!")
+                    text_lines.append("🎯 Ходите еще раз!")
+                    text_lines.append("")
+                    text_lines.append("Используйте /roll")
+
+                # Объединяем все строки
+                final_response = "\n".join(text_lines)
+
+                # Обновляем сообщение
+                await query.edit_message_caption(
+                    caption=final_response,
+                    parse_mode=None,
+                    reply_markup=None
+                )
+
+                if not double:
+                    # Уведомляем следующего игрока ТОЛЬКО если не дубль
+                    next_player = game.get_current_player()
+                    if next_player and next_player.user_id != user.id:
+                        try:
+                            await notify_next_player(game, context, user.id)
+                        except Exception as e:
+                            print(f"❌ Не удалось уведомить следующего игрока: {e}")
+                else:
+                    # При дубле отправляем сообщение игроку
                     await context.bot.send_message(
                         chat_id=user.id,
-                        text=f"🎲 *ДУБЛЬ!*\n🎯 Ходите еще раз!\n\nИспользуйте `/roll`",
-                        parse_mode="Markdown"
+                        text=f"🎲 ДУБЛЬ!\n🎯 Ходите еще раз!\n\nИспользуйте /roll"
                     )
 
                 game_manager.save_game_state(game_id)
 
-        # Обработка кнопки "Передать ход"
-        elif data.startswith("pass_turn_"):
-            game_id = data.replace("pass_turn_", "")
+                # Уведомляем других игроков о пропуске
+                for other_id, other_player in game.players.items():
+                    if other_id != user.id:
+                        try:
+                            other_text = f"⏭️ {player.full_name} пропустил(а) покупку {cell.name}"
 
-            game = game_manager.get_game(game_id)
-            if not game:
-                await query.answer("❌ Игра не найдена", show_alert=True)
-                return
+                            # Добавляем информацию о следующем игроке только если не дубль
+                            if not double:
+                                next_player = game.get_current_player()
+                                if next_player:
+                                    other_text += f"\n⏭️ Следующий ход: {next_player.full_name}"
 
-            player = game.players.get(user.id)
-            if not player:
-                await query.answer("❌ Вы не в этой игре", show_alert=True)
-                return
+                            await context.bot.send_message(
+                                chat_id=other_id,
+                                text=other_text
+                            )
+                        except Exception as e:
+                            print(f"❌ Не удалось уведомить игрока {other_id}: {e}")
 
-            # Переход хода
-            game.next_turn()
+        # Обработка кнопки "Передать ход" - ИСПРАВЛЕННАЯ ВЕРСИЯ
+        # #elif data.startswith("pass_turn_"):
+        #     # Разбираем callback_data: pass_turn_<game_id> или pass_turn_<game_id>_<dice1>_<dice2>
+        #     parts = data.split("_")
+        #
+        #     if len(parts) < 3:  # pass_turn_<game_id> как минимум
+        #         await query.answer("❌ Неверный формат callback_data", show_alert=True)
+        #         return
+        #
+        #     game_id = parts[2]  # Третья часть это game_id
+        #
+        #     # Проверяем, есть ли информация о кубиках
+        #     double_info = None
+        #     if len(parts) >= 5:  # pass_turn_<game_id>_<dice1>_<dice2>
+        #         try:
+        #             dice1 = int(parts[3])
+        #             dice2 = int(parts[4])
+        #             double_info = (dice1 == dice2)
+        #         except:
+        #             double_info = None
+        #
+        #     game = game_manager.get_game(game_id)
+        #     if not game:
+        #         await query.answer("❌ Игра не найдена", show_alert=True)
+        #         return
+        #
+        #     player = game.players.get(user.id)
+        #     if not player:
+        #         await query.answer("❌ Вы не в этой игре", show_alert=True)
+        #         return
+        #
+        #     # Проверяем, может ли игрок передать ход
+        #     current_player = game.get_current_player()
+        #     if not current_player:
+        #         await query.answer("❌ Нет текущего игрока", show_alert=True)
+        #         return
+        #
+        #     # Проверяем, что кнопку нажимает текущий игрок
+        #     if current_player.user_id != user.id:
+        #         # Проверяем, не устарела ли кнопка
+        #         # Возможно, ход уже перешел, но кнопка осталась
+        #         await query.answer(
+        #             f"⏳ Сейчас ходит {current_player.full_name}! Ждите своей очереди.",
+        #             show_alert=True
+        #         )
+        #         return
+        #
+        #     # Сохраняем имя текущего игрока перед передачей хода
+        #     old_player_name = current_player.full_name
+        #     old_player_color = current_player.color if hasattr(current_player, 'color') else '🎲'
+        #
+        #     # ВАЖНО: Проверяем, был ли дубль
+        #     # Если был дубль - НЕ передаем ход
+        #     if double_info is True:
+        #         # Был дубль - игрок ходит еще раз
+        #         transfer_text = f"🎲 ДУБЛЬ!\n🎯 {old_player_color} {old_player_name} ходит еще раз!"
+        #
+        #         # Обновляем сообщение
+        #         try:
+        #             if query.message.caption:
+        #                 await query.edit_message_caption(
+        #                     caption=transfer_text,
+        #                     parse_mode=None,
+        #                     reply_markup=None
+        #                 )
+        #             else:
+        #                 await query.edit_message_text(
+        #                     text=transfer_text,
+        #                     parse_mode=None,
+        #                     reply_markup=None
+        #                 )
+        #         except Exception as e:
+        #             print(f"❌ Ошибка при обновлении сообщения: {e}")
+        #             await query.answer(transfer_text, show_alert=True)
+        #
+        #         # Уведомляем игрока, что он ходит еще раз
+        #         await context.bot.send_message(
+        #             chat_id=user.id,
+        #             text=f"🎲 ДУБЛЬ!\n🎯 Ваш ход продолжается!\n\nИспользуйте /roll чтобы бросить кубики снова"
+        #         )
+        #
+        #     else:
+        #         # НЕ было дубля - передаем ход
+        #         game.next_turn()
+        #
+        #         # Получаем следующего игрока
+        #         next_player = game.get_current_player()
+        #
+        #         if next_player:
+        #             next_player_color = next_player.color if hasattr(next_player, 'color') else '🎲'
+        #             transfer_text = f"⏭️ Ход передан\n\n"
+        #             transfer_text += f"🎲 Предыдущий: {old_player_color} {old_player_name}\n"
+        #             transfer_text += f"🎯 Следующий: {next_player_color} {next_player.full_name}"
+        #         else:
+        #             transfer_text = f"⏭️ {old_player_name} передал(а) ход"
+        #
+        #         # Обновляем сообщение
+        #         try:
+        #             if query.message.caption:
+        #                 await query.edit_message_caption(
+        #                     caption=transfer_text,
+        #                     parse_mode=None,
+        #                     reply_markup=None
+        #                 )
+        #             else:
+        #                 await query.edit_message_text(
+        #                     text=transfer_text,
+        #                     parse_mode=None,
+        #                     reply_markup=None
+        #                 )
+        #         except Exception as e:
+        #             print(f"❌ Ошибка при обновлении сообщения: {e}")
+        #             await query.answer(transfer_text, show_alert=True)
+        #
+        #         # Уведомляем следующего игрока
+        #         if next_player and next_player.user_id != user.id:
+        #             await notify_next_player(game, context, user.id)
+        #
+        #     # Сохраняем состояние игры
+        #     game_manager.save_game_state(game_id)
 
-            # Обновляем сообщение
-            await query.edit_message_caption(
-                caption=f"⏭️ {player.full_name} передал(а) ход",
-                parse_mode="Markdown",
-                reply_markup=None
-            )
-
-            await notify_next_player(game, context, user.id)
-            game_manager.save_game_state(game_id)
-
-        # Обработка тюремных кнопок
+        # Обработка кнопок тюрьмы
         elif data.startswith("jail_"):
-            if data.startswith("jail_roll_"):
-                game_id = data.replace("jail_roll_", "")
-                game = game_manager.get_game(game_id)
-                if game and game.players.get(user.id):
-                    player = game.players[user.id]
+            parts = data.split("_")
+            if len(parts) >= 3:
+                action = parts[1]  # roll, pay, card, skip
+                game_id = parts[2]
 
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена", show_alert=True)
+                    return
+
+                player = game.players.get(user.id)
+                if not player:
+                    await query.answer("❌ Вы не в этой игре", show_alert=True)
+                    return
+
+                # Проверка на текущего игрока
+                current_player = game.get_current_player()
+                if current_player and current_player.user_id != user.id:
+                    await query.answer(f"❌ Сейчас ходит {current_player.full_name}!", show_alert=True)
+                    return
+
+                if not player.in_jail:
+                    await query.answer("❌ Вы не в тюрьме!", show_alert=True)
+                    return
+
+                # Обработка действий в тюрьме
+                if action == "roll":
                     dice1, dice2, total = game.roll_dice()
 
                     if dice1 == dice2:
-                        # Дубль - выходим из тюрьмы
+                        # Успешный дубль
                         player.release_from_jail()
-                        await query.edit_message_text(
-                            f"🎲 *ДУБЛЬ!*\n🎯 {dice1} + {dice2} = {total}\n\n"
-                            f"🔓 Вы вышли из тюрьмы!\n"
-                            f"🎉 Бесплатно!\n\n"
-                            f"Ходите еще раз: /roll",
-                            parse_mode="Markdown"
-                        )
+                        response = f"🎲 ДУБЛЬ!\n🎯 {dice1} + {dice2} = {total}\n🔓 Вы вышли из тюрьмы!\n🎲 Теперь ваш ход!"
                     else:
-                        # Не дубль - остаемся в тюрьме
+                        # Неудачная попытка
                         player.jail_turns += 1
-
                         if player.jail_turns >= 3:
-                            # После 3-х неудачных попыток платить штраф
-                            await query.edit_message_text(
-                                f"🎲 *Нет дубля*\n🎯 {dice1} + {dice2} = {total}\n\n"
-                                f"🔒 Ходов в тюрьме: {player.jail_turns}/3\n"
-                                f"💵 Нужно заплатить $50\n\n"
-                                f"Используйте кнопку 💵 Заплатить $50",
-                                parse_mode="Markdown"
-                            )
+                            player.release_from_jail()
+                            response = f"🎲 Нет дубля\n🎯 {dice1} + {dice2} = {total}\n⏰ Прошло 3 круга!\n🔓 Вы вышли автоматически!"
+                            game.next_turn()
                         else:
-                            await query.edit_message_text(
-                                f"🎲 *Нет дубля*\n🎯 {dice1} + {dice2} = {total}\n\n"
-                                f"🔒 Остаетесь в тюрьме\n"
-                                f"📈 Ходов в тюрьме: {player.jail_turns}/3",
-                                parse_mode="Markdown"
-                            )
+                            response = f"🎲 Нет дубля\n🎯 {dice1} + {dice2} = {total}\n🔒 Остаётесь в тюрьме\n📅 Круг: {player.jail_turns}/3"
+                            game.next_turn()
 
+                    await query.edit_message_text(response)
                     game_manager.save_game_state(game_id)
 
-            elif data.startswith("jail_pay_"):
-                game_id = data.replace("jail_pay_", "")
-                game = game_manager.get_game(game_id)
-                if game and game.players.get(user.id):
-                    player = game.players[user.id]
+                    # Уведомляем следующего игрока, если ход перешел
+                    if not (dice1 == dice2) or player.jail_turns >= 3:
+                        next_player = game.get_current_player()
+                        if next_player and next_player.user_id != user.id:
+                            await notify_next_player(game, context, user.id)
 
+                elif action == "pay":
                     if player.money >= Config.JAIL_FINE:
                         player.deduct_money(Config.JAIL_FINE)
                         player.release_from_jail()
-
-                        await query.edit_message_text(
-                            f"💵 *Штраф оплачен!*\n"
-                            f"💸 Списан: ${Config.JAIL_FINE}\n"
-                            f"🔓 Вы вышли из тюрьмы!\n"
-                            f"💰 Ваш баланс: ${player.money}\n\n"
-                            f"Ваш ход: /roll",
-                            parse_mode="Markdown"
-                        )
+                        response = f"💵 Вы заплатили ${Config.JAIL_FINE}\n🔓 Вы вышли из тюрьмы!\n💰 Баланс: ${player.money}"
                     else:
-                        await query.answer(
-                            f"❌ Недостаточно денег!\n💸 Нужно: ${Config.JAIL_FINE}\n💰 У вас: ${player.money}",
-                            show_alert=True
-                        )
+                        player.jail_turns += 1
+                        if player.jail_turns >= 3:
+                            player.release_from_jail()
+                            game.next_turn()
+                            response = f"❌ Недостаточно денег!\n⏰ Прошло 3 круга!\n🔓 Вы вышли автоматически!"
+                        else:
+                            game.next_turn()
+                            response = f"❌ Недостаточно денег!\n🔒 Остаётесь в тюрьме\n📅 Круг: {player.jail_turns}/3"
 
+                    await query.edit_message_text(response)
                     game_manager.save_game_state(game_id)
 
-            elif data.startswith("jail_card_"):
-                game_id = data.replace("jail_card_", "")
-                game = game_manager.get_game(game_id)
-                if game and game.players.get(user.id):
-                    player = game.players[user.id]
+                    # Уведомляем следующего игрока
+                    next_player = game.get_current_player()
+                    if next_player and next_player.user_id != user.id:
+                        await notify_next_player(game, context, user.id)
 
+                elif action == "card":
                     if player.get_out_of_jail_cards > 0:
                         player.get_out_of_jail_cards -= 1
                         player.release_from_jail()
-
-                        await query.edit_message_text(
-                            f"🎫 *Карта использована!*\n"
-                            f"🔓 Вы вышли из тюрьмы!\n"
-                            f"📊 Осталось карт: {player.get_out_of_jail_cards}\n\n"
-                            f"Ваш ход: /roll",
-                            parse_mode="Markdown"
-                        )
+                        response = f"🎫 Карта использована!\n🔓 Вы вышли из тюрьмы!\n📊 Осталось карт: {player.get_out_of_jail_cards}"
                     else:
-                        await query.answer(
-                            "❌ Нет карт освобождения!\n🔒 Остаетесь в тюрьме\n💡 Карты можно получить из Шанса/Казна",
-                            show_alert=True
-                        )
+                        player.jail_turns += 1
+                        if player.jail_turns >= 3:
+                            player.release_from_jail()
+                            game.next_turn()
+                            response = f"❌ Нет карт освобождения!\n⏰ Прошло 3 круга!\n🔓 Вы вышли автоматически!"
+                        else:
+                            game.next_turn()
+                            response = f"❌ Нет карт освобождения!\n🔒 Остаётесь в тюрьме\n📅 Круг: {player.jail_turns}/3"
 
+                    await query.edit_message_text(response)
                     game_manager.save_game_state(game_id)
 
-            elif data.startswith("jail_skip_"):
-                game_id = data.replace("jail_skip_", "")
-                game = game_manager.get_game(game_id)
-                if game and game.players.get(user.id):
-                    player = game.players[user.id]
-
-                    player.jail_turns += 1
-
-                    if player.jail_turns >= 3:
-                        # После 3-х ходов в тюрьме - платить штраф
-                        await query.edit_message_text(
-                            f"⏳ *Пропущено 3 хода в тюрьме*\n"
-                            f"💵 Нужно заплатить $50\n\n"
-                            f"Используйте кнопку 💵 Заплатить $50",
-                            parse_mode="Markdown"
-                        )
-                    else:
-                        # Переход хода
-                        game.next_turn()
-                        await query.edit_message_text(
-                            f"⏳ *Пропущен ход*\n"
-                            f"📈 Ходов в тюрьме: {player.jail_turns}/3",
-                            parse_mode="Markdown"
-                        )
+                    # Уведомляем следующего игрока
+                    next_player = game.get_current_player()
+                    if next_player and next_player.user_id != user.id:
                         await notify_next_player(game, context, user.id)
 
-                    game_manager.save_game_state(game_id)
-
-        # Главное меню
+        # Главное меню (доступно всем)
         elif data == "menu_new_game":
             await newgame_command(query.message, context)
 
         elif data == "menu_join_game":
             await query.edit_message_text(
-                "👥 *Присоединиться к игре*\n\n"
+                "👥 Присоединиться к игре\n\n"
                 "Введите команду:\n"
-                "`/join КОД_ИГРЫ`\n\n"
-                "Или посмотрите доступные игры: /games",
-                parse_mode="Markdown"
+                "/join КОД_ИГРЫ\n\n"
+                "Или посмотрите доступные игры: /games"
             )
 
         elif data == "menu_rules":
@@ -1604,77 +1948,96 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "menu_profile":
             await myid_command(query.message, context)
 
-        # Лобби
+        # Лобби (доступно участникам лобби)
         elif data.startswith("lobby_start_"):
             game_id = data.replace("lobby_start_", "")
-            await startgame_command(query.message, context)
+            game = game_manager.get_game(game_id)
+
+            if game and user.id == game.creator_id:
+                await startgame_command(query.message, context)
+            else:
+                await query.answer("❌ Только создатель может начать игру!", show_alert=True)
 
         elif data.startswith("lobby_invite_"):
             game_id = data.replace("lobby_invite_", "")
-            await query.message.reply_text(
-                f"👥 *Приглашение в игру*\n\n"
-                f"Код игры: `{game_id}`\n\n"
-                f"Отправьте друзьям эту команду:\n"
-                f"`/join {game_id}`",
-                parse_mode="Markdown"
-            )
+            game = game_manager.get_game(game_id)
+
+            if game and user.id in game.players:
+                await query.message.reply_text(
+                    f"👥 Приглашение в игра\n\n"
+                    f"Код игры: {game_id}\n\n"
+                    f"Отправьте друзьям эту команду:\n"
+                    f"/join {game_id}"
+                )
+            else:
+                await query.answer("❌ Вы не в этой игре!", show_alert=True)
 
         elif data.startswith("lobby_stats_"):
             game_id = data.replace("lobby_stats_", "")
             game = game_manager.get_game(game_id)
 
-            if game:
+            if game and user.id in game.players:
                 players_list = "\n".join([
-                    f"• {escape_markdown(player.full_name)}" +
+                    f"• {player.full_name}" +
                     (" 👑" if player.user_id == game.creator_id else "")
                     for player in game.players.values()
                 ])
 
                 await query.message.reply_text(
-                    f"📊 *Статистика лобби*\n\n"
-                    f"🎮 Игра: `{game.game_id}`\n"
+                    f"📊 Статистика лобби\n\n"
+                    f"🎮 Игра: {game.game_id}\n"
                     f"👥 Игроков: {len(game.players)}/{Config.MAX_PLAYERS}\n\n"
-                    f"*Участники:*\n{players_list}",
-                    parse_mode="Markdown"
+                    f"Участники:\n{players_list}"
                 )
+            else:
+                await query.answer("❌ Вы не в этой игре!", show_alert=True)
 
         elif data == "lobby_leave":
             await leave_command(query.message, context)
 
-        # Игровые действия
+        # Игровые действия (проверяем, что игрок в игре)
         elif data == "game_roll_dice":
-            await roll_command(query.message, context)
+            game = game_manager.get_player_game(user.id)
+            if game:
+                current_player = game.get_current_player()
+                if current_player and current_player.user_id == user.id:
+                    await roll_command(query.message, context)
+                else:
+                    await query.answer("❌ Не ваш ход!", show_alert=True)
+            else:
+                await query.answer("❌ Вы не в игре!", show_alert=True)
 
         elif data == "game_view_board":
             game = game_manager.get_player_game(user.id)
             if game:
-                board_text = "🗺️ *Игровое поле*\n\n"
-                for player in game.players.values():
-                    board_text += f"{player.color} *{escape_markdown(player.full_name)}*: клетка {player.position}\n"
-
-                await query.message.edit_text(board_text, parse_mode="Markdown")
+                await board_command(query.message, context)
+            else:
+                await query.answer("❌ Вы не в игре!", show_alert=True)
 
         elif data == "game_my_properties":
             game = game_manager.get_player_game(user.id)
             if game:
-                player = game.players.get(user.id)
-                if player:
-                    response = f"🏘 *Собственность {escape_markdown(player.full_name)}*\n\n"
-                    response += f"💰 *Деньги:* {format_money(player.money)}\n"
-                    response += f"📍 *Позиция:* {player.position}\n"
-
-                    await query.message.edit_text(response, parse_mode="Markdown")
+                await properties_command(query.message, context)
+            else:
+                await query.answer("❌ Вы не в игре!", show_alert=True)
 
         elif data == "game_players":
-            await status_command(query.message, context)
+            game = game_manager.get_player_game(user.id)
+            if game:
+                await status_command(query.message, context)
+            else:
+                await query.answer("❌ Вы не в игре!", show_alert=True)
 
         elif data == "game_leave":
-            await leave_command(query.message, context)
+            game = game_manager.get_player_game(user.id)
+            if game:
+                await leave_command(query.message, context)
+            else:
+                await query.answer("❌ Вы не в игре!", show_alert=True)
 
     except Exception as e:
         logger.error(f"Ошибка обработки кнопки {data}: {e}")
         await query.answer("⚠️ Произошла ошибка", show_alert=True)
-
 
 async def properties_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Полная рабочая версия /properties"""
@@ -1706,43 +2069,44 @@ async def properties_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Ошибка: игрок не найден в игре!")
         return
     player_color = player.color if hasattr(player, 'color') else "🎲"
-    response = f"{player_color} *СОБСТВЕННОСТЬ {getattr(player, 'full_name', 'Игрок')}*\n\n"
+    response = f"{player_color} *СОБСТВЕННОСТЬ {escape_markdown(getattr(player, 'full_name', 'Игрок'))}*\n\n"
     response += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
     # ОСНОВНАЯ ИНФОРМАЦИЯ
     response += f"💰 *Баланс:* ${getattr(player, 'money', 0)}\n"
     response += f"📍 *Позиция:* {getattr(player, 'position', 0)}\n"
     response += f"🎨 *Цвет фишки:* {player_color}\n"
-    response += f"🎮 *Статус:* {getattr(getattr(player, 'status', None), 'value', 'активен')}\n\n"
-    # Формируем ответ
-
-    # ОСНОВНАЯ ИНФОРМАЦИЯ
+    response += f"🎮 *Статус:* {escape_markdown(getattr(getattr(player, 'status', None), 'value', 'активен'))}\n\n"
 
     response += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-    # УЛИЦЫ
+    # УЛИЦЫ (С ДОПОЛНЕНИЕМ ИНФОРМАЦИИ О ДОМАХ)
     properties = getattr(player, 'properties', [])
     if properties:
         response += f"🏠 *УЛИЦЫ ({len(properties)}):*\n"
         for prop_id in properties:
             cell = game.board.get_cell(prop_id)
             if cell and hasattr(cell, 'name'):
-                # Получаем информацию о домах
+                # Информация о домах/отеле
                 houses_info = ""
-                if hasattr(cell, 'houses') and cell.houses > 0:
-                    if hasattr(cell, 'hotel') and cell.hotel:
-                        houses_info = "🏨 ОТЕЛЬ"
-                    else:
-                        houses_info = f"🏠×{cell.houses}"
+                if hasattr(cell, 'hotel') and cell.hotel:
+                    houses_info = "🏨 ОТЕЛЬ"
+                elif hasattr(cell, 'houses') and cell.houses > 0:
+                    houses_info = f"🏠×{cell.houses}"
 
-                # Получаем информацию о залоге
+                # Информация о залоге
                 mortgaged_info = "💳 ЗАЛОЖЕНА" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
 
-                response += f"• *{cell.name}*"
+                # Цветовая группа
+                color_info = f"🎨 {cell.color_group}" if hasattr(cell, 'color_group') else ""
+
+                response += f"• *{escape_markdown(cell.name)}* ({prop_id})"
                 if houses_info:
                     response += f" {houses_info}"
                 if mortgaged_info:
                     response += f" {mortgaged_info}"
+                if color_info:
+                    response += f" {color_info}"
                 response += f"\n"
     else:
         response += "🏠 *УЛИЦЫ:* нет\n"
@@ -1757,7 +2121,7 @@ async def properties_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             cell = game.board.get_cell(station_id)
             if cell and hasattr(cell, 'name'):
                 mortgaged_info = "💳 ЗАЛОЖЕН" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
-                response += f"• *{cell.name}* {mortgaged_info}\n"
+                response += f"• *{escape_markdown(cell.name)}* {mortgaged_info}\n"
     else:
         response += "🚂 *МЕТРО:* нет\n"
 
@@ -1766,16 +2130,17 @@ async def properties_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # ПРЕДПРИЯТИЯ
     utilities = getattr(player, 'utilities', [])
     if utilities:
-        response += f"⚡ *ПРЕДПРИЯТИЯ ({len(utilities)}):*\n"
+        response += f"⚡️ *ПРЕДПРИЯТИЯ ({len(utilities)}):*\n"
         for util_id in utilities:
             cell = game.board.get_cell(util_id)
             if cell and hasattr(cell, 'name'):
                 mortgaged_info = "💳 ЗАЛОЖЕНО" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
-                response += f"• *{cell.name}* {mortgaged_info}\n"
+                response += f"• *{escape_markdown(cell.name)}* {mortgaged_info}\n"
     else:
-        response += "⚡ *ПРЕДПРИЯТИЯ:* нет\n"
+        response += "⚡️ *ПРЕДПРИЯТИЯ:* нет\n"
 
     response += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
 
     # Если нет собственности
     if not properties and not stations and not utilities:
@@ -1790,31 +2155,510 @@ async def properties_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     response += "📊 *СТАТИСТИКА:*\n"
     response += f"• Получено ренты: ${getattr(player, 'total_rent_received', 0)}\n"
     response += f"• Уплачено ренты: ${getattr(player, 'total_rent_paid', 0)}\n"
-    response += f"• Куплено недвижимости: {len(properties)}\n"  # Используем количество property вместо отдельного счетчика
+    response += f"• Куплено недвижимости: {len(properties)}\n"
     response += f"• Карт освобождения: {getattr(player, 'get_out_of_jail_cards', 0)}\n"
 
-    # Добавляем кнопки управления (если они есть)
-    try:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🏗️ Управление домами", callback_data="manage_houses")],
-            [InlineKeyboardButton("💳 Заложить собственность", callback_data="manage_mortgage")],
-            [InlineKeyboardButton("🎮 Вернуться к игре", callback_data="back_game_actions")],
-            [InlineKeyboardButton("🔙 Главное меню", callback_data="back_main_menu")]
-        ])
+    # ДОБАВЛЯЕМ РАЗДЕЛ С КОМАНДАМИ ДЛЯ УПРАВЛЕНИЯ ДОМАМИ
+    response += "\n🏗 *УПРАВЛЕНИЕ ДОМАМИ:*\n"
+    response += "• `/houses` - информация о домах\n"
+    response += "• `/build_house` - построить дом\n"
+    response += "• `/build_hotel` - построить отель\n"
+    response += "• `/sell_house` - продать дом/отель\n"
 
-        await update.message.reply_text(
-            response,
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
-    except:
-        # Если есть ошибки с кнопками, отправляем без них
-        await update.message.reply_text(
-            response,
-            parse_mode="Markdown"
-        )
+    # Добавляем кнопки управления (если они есть)
+    await update.message.reply_text(
+        response,
+        parse_mode="Markdown"
+    )
 
     print(f"✅ Информация отправлена пользователю {user.id}")
+async def build_house_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для постройки дома"""
+    try:
+        user = update.effective_user
+
+        # Получаем игру
+        game = game_manager.get_player_game(user.id)
+        if not game:
+            await update.message.reply_text(
+                "❌ *Вы не в игре!*",
+                parse_mode="Markdown"
+            )
+            return
+
+        player = game.players.get(user.id)
+        if not player:
+            await update.message.reply_text("❌ Игрок не найден!")
+            return
+
+        # Проверяем аргументы
+        if not context.args:
+            # Показываем список доступных для строительства улиц
+            available_properties = []
+
+            for prop_id in player.properties:
+                check_result = game.board.can_build_house(prop_id, player.user_id)
+                if check_result.get("can_build"):
+                    cell = game.board.get_cell(prop_id)
+                    available_properties.append({
+                        "id": prop_id,
+                        "name": cell.name,
+                        "houses": cell.houses,
+                        "price": check_result.get("house_price", 0)
+                    })
+
+            if not available_properties:
+                await update.message.reply_text(
+                    "❌ *Нет доступных улиц для строительства!*\n\n"
+                    "📋 *Условия для строительства:*\n"
+                    "1. Владеть всей цветовой группой\n"
+                    "2. Равномерная застройка (нельзя отставать на 2 дома)\n"
+                    "3. Не более 4 домов на улице\n"
+                    "4. Улица не в залоге\n"
+                    "5. Есть деньги для строительства\n\n"
+                    "💰 *Стоимость дома:* $50-200 в зависимости от улицы",
+                    parse_mode="Markdown"
+                )
+                return
+
+            # Формируем список доступных улиц
+            response = f"🏗 *ДОСТУПНЫЕ ДЛЯ СТРОИТЕЛЬСТВА УЛИЦЫ*\n\n"
+
+            for i, prop in enumerate(available_properties, 1):
+                response += f"{i}. *{prop['name']}*\n"
+                response += f"   📍 Клетка: {prop['id']}\n"
+                response += f"   🏠 Домов: {prop['houses']}/4\n"
+                response += f"   💵 Стоимость: ${prop['price']}\n"
+                response += f"   👉 Команда: `/build_house {prop['id']}`\n\n"
+
+            response += "🎯 *Как построить:*\n"
+            response += "`/build_house НОМЕР_КЛЕТКИ`\n"
+            response += "Пример: `/build_house 1`"
+
+            await update.message.reply_text(response, parse_mode="Markdown")
+            return
+
+        # Обработка команды с аргументом
+        try:
+            property_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text(
+                "❌ *Неверный формат!*\n"
+                "Используйте: `/build_house НОМЕР_КЛЕТКИ`\n"
+                "Пример: `/build_house 1`",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверяем, что игрок владеет этой недвижимостью
+        if property_id not in player.properties:
+            await update.message.reply_text(
+                "❌ *Вы не владеете этой недвижимостью!*",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверяем возможность строительства
+        check_result = game.board.can_build_house(property_id, player.user_id)
+
+        if not check_result.get("can_build"):
+            reason = check_result.get("reason", "Неизвестная причина")
+            await update.message.reply_text(
+                f"❌ *Нельзя построить дом!*\n\n"
+                f"📋 *Причина:* {reason}",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверяем деньги
+        house_price = check_result.get("house_price", 0)
+
+
+        if player.money < house_price:
+            await update.message.reply_text(
+                f"❌ *Недостаточно денег!*\n\n"
+                f"💰 *Нужно:* ${house_price}\n"
+                f"💵 *У вас:* ${player.money}",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Строим дом
+        cell = game.board.get_cell(property_id)
+
+        # Списываем деньги
+        player.deduct_money(house_price)
+
+        # Строим дом
+        cell.houses += 1
+
+        # Обновляем статистику
+        if hasattr(player, 'houses_built'):
+            player.houses_built += 1
+
+        # Формируем ответ
+        response = f"✅ *ДОМ ПОСТРОЕН!*\n\n"
+        response += f"🏠 *Улица:* {cell.name}\n"
+        response += f"🎨 *Цвет:* {cell.color_group}\n"
+        response += f"🏗 *Домов теперь:* {cell.houses}/4\n"
+        response += f"💸 *Потрачено:* ${house_price}\n"
+        response += f"💰 *Остаток:* ${player.money}\n\n"
+
+        # Проверяем, можно ли строить отель
+        if cell.houses == 4:
+            response += f"🎉 *Достигнут максимум домов!*\n"
+            response += f"🏨 *Теперь можно построить отель:*\n"
+            response += f"💰 Стоимость: ${getattr(cell, 'hotel_price', house_price * 5)}\n"
+            response += f"👉 Команда: `/build_hotel {property_id}`\n\n"
+
+        response += f"📈 *Рента теперь:* ${cell.get_rent()}"
+
+        await update.message.reply_text(response, parse_mode="Markdown")
+
+        # Сохраняем состояние игры
+        game_manager.save_game_state(game.game_id)
+
+    except Exception as e:
+        print(f"❌ Ошибка в build_house_command: {e}")
+        import traceback
+        traceback.print_exc()
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+
+async def build_hotel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для постройки отеля"""
+    try:
+        user = update.effective_user
+
+        # Получаем игру
+        game = game_manager.get_player_game(user.id)
+        if not game:
+            await update.message.reply_text(
+                "❌ *Вы не в игре!*",
+                parse_mode="Markdown"
+            )
+            return
+
+        player = game.players.get(user.id)
+        if not player:
+            await update.message.reply_text("❌ Игрок не найден!")
+            return
+
+        # Проверяем аргументы
+        if not context.args:
+            # Показываем список доступных для отелей улиц
+            available_hotels = []
+
+            for prop_id in player.properties:
+                check_result = game.board.can_build_hotel(prop_id, player.user_id)
+                if check_result.get("can_build"):
+                    cell = game.board.get_cell(prop_id)
+                    available_hotels.append({
+                        "id": prop_id,
+                        "name": cell.name,
+                        "hotel_price": check_result.get("hotel_price", 0)
+                    })
+
+            if not available_hotels:
+                await update.message.reply_text(
+                    "❌ *Нет доступных улиц для постройки отеля!*\n\n"
+                    "📋 *Условия для отеля:*\n"
+                    "1. Иметь 4 дома на улице\n"
+                    "2. Владеть всей цветовой группой\n"
+                    "3. Улица не в залоге\n"
+                    "4. Есть деньги для строительства\n\n"
+                    "💰 *Стоимость отеля:* $200-1000 в зависимости от улицы",
+                    parse_mode="Markdown"
+                )
+                return
+
+            # Формируем список
+            response = f"🏨 *ДОСТУПНЫЕ ДЛЯ ОТЕЛЯ УЛИЦЫ*\n\n"
+
+            for i, prop in enumerate(available_hotels, 1):
+                response += f"{i}. *{prop['name']}*\n"
+                response += f"   📍 Клетка: {prop['id']}\n"
+                response += f"   💵 Стоимость отеля: ${prop['hotel_price']}\n"
+                response += f"   👉 Команда: `/build_hotel {prop['id']}`\n\n"
+
+            await update.message.reply_text(response, parse_mode="Markdown")
+            return
+
+
+        # Обработка команды с аргументом
+        try:
+            property_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text(
+                "❌ *Неверный формат!*\n"
+                "Используйте: `/build_hotel НОМЕР_КЛЕТКИ`",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверяем владение
+        if property_id not in player.properties:
+            await update.message.reply_text(
+                "❌ *Вы не владеете этой недвижимостью!*",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверяем возможность строительства отеля
+        check_result = game.board.can_build_hotel(property_id, player.user_id)
+
+        if not check_result.get("can_build"):
+            reason = check_result.get("reason", "Неизвестная причина")
+            await update.message.reply_text(
+                f"❌ *Нельзя построить отель!*\n\n"
+                f"📋 *Причина:* {reason}",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверяем деньги
+        hotel_price = check_result.get("hotel_price", 0)
+
+        if player.money < hotel_price:
+            await update.message.reply_text(
+                f"❌ *Недостаточно денег!*\n\n"
+                f"💰 *Нужно:* ${hotel_price}\n"
+                f"💵 *У вас:* ${player.money}",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Строим отель
+        cell = game.board.get_cell(property_id)
+
+        # Списываем деньги
+        player.deduct_money(hotel_price)
+
+        # Строим отель
+        cell.hotel = True
+        cell.houses = 0
+
+        # Обновляем статистику
+        if hasattr(player, 'hotels_built'):
+            player.hotels_built += 1
+
+        # Формируем ответ
+        response = f"🎉 *ОТЕЛЬ ПОСТРОЕН!*\n\n"
+        response += f"🏨 *Улица:* {cell.name}\n"
+        response += f"🎨 *Цвет:* {cell.color_group}\n"
+        response += f"💸 *Потрачено:* ${hotel_price}\n"
+        response += f"💰 *Остаток:* ${player.money}\n"
+        response += f"📈 *Рента теперь:* ${cell.get_rent()}\n\n"
+        response += f"⚠️ *Внимание:* Отель нельзя разделить обратно на дома!\n"
+        response += f"💰 Продать можно только целиком за ${hotel_price // 2}"
+
+        await update.message.reply_text(response, parse_mode="Markdown")
+
+        # Сохраняем состояние игры
+        game_manager.save_game_state(game.game_id)
+
+    except Exception as e:
+        print(f"❌ Ошибка в build_hotel_command: {e}")
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+
+async def sell_house_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для продажи дома/отеля"""
+    try:
+        user = update.effective_user
+
+        # Получаем игру
+        game = game_manager.get_player_game(user.id)
+        if not game:
+            await update.message.reply_text(
+                "❌ *Вы не в игре!*",
+                parse_mode="Markdown"
+            )
+            return
+
+        player = game.players.get(user.id)
+        if not player:
+            await update.message.reply_text("❌ Игрок не найден!")
+            return
+
+        # Проверяем аргументы
+        if not context.args:
+            # Показываем список доступных для продажи
+            available_sales = []
+
+            for prop_id in player.properties:
+                check_result = game.board.can_sell_house(prop_id, player.user_id)
+                if check_result.get("can_sell"):
+                    cell = game.board.get_cell(prop_id)
+
+                    if check_result.get("is_hotel"):
+                        sale_type = "Отель"
+                        price = check_result.get("sell_price", 0)
+                    else:
+                        sale_type = f"Дом ({cell.houses} шт.)"
+                        price = check_result.get("sell_price", 0)
+
+                    available_sales.append({
+                        "id": prop_id,
+                        "name": cell.name,
+                        "type": sale_type,
+                        "price": price
+                    })
+
+
+            if not available_sales:
+                await update.message.reply_text(
+                    "❌ *Нет доступных домов/отелей для продажи!*\n\n"
+                    "📋 *Условия для продажи:*\n"
+                    "1. На улице должны быть дома или отель\n"
+                    "2. Равномерность застройки (нельзя быть впереди)\n"
+                    "3. Продажа возможна только банку за полцены\n",
+                    parse_mode="Markdown"
+                )
+                return
+
+            # Формируем список
+            response = f"💰 *ДОСТУПНЫЕ ДЛЯ ПРОДАЖИ*\n\n"
+
+            for i, sale in enumerate(available_sales, 1):
+                response += f"{i}. *{sale['name']}*\n"
+                response += f"   📍 Клетка: {sale['id']}\n"
+                response += f"   🏠 Что: {sale['type']}\n"
+                response += f"   💵 Выручка: ${sale['price']}\n"
+                response += f"   👉 Команда: `/sell_house {sale['id']}`\n\n"
+
+            await update.message.reply_text(response, parse_mode="Markdown")
+            return
+
+        # Обработка команды с аргументом
+        try:
+            property_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text(
+                "❌ *Неверный формат!*\n"
+                "Используйте: `/sell_house НОМЕР_КЛЕТКИ`",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверяем владение
+        if property_id not in player.properties:
+            await update.message.reply_text(
+                "❌ *Вы не владеете этой недвижимостью!*",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверяем возможность продажи
+        check_result = game.board.can_sell_house(property_id, player.user_id)
+
+        if not check_result.get("can_sell"):
+            reason = check_result.get("reason", "Неизвестная причина")
+            await update.message.reply_text(
+                f"❌ *Нельзя продать!*\n\n"
+                f"📋 *Причина:* {reason}",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Продаем
+        cell = game.board.get_cell(property_id)
+        sell_price = check_result.get("sell_price", 0)
+
+        # Начисляем деньги
+        player.add_money(sell_price)
+
+        if check_result.get("is_hotel"):
+            # Продаем отель
+            cell.hotel = False
+            cell.houses = 4
+
+            response = f"🏨 *ОТЕЛЬ ПРОДАН!*\n\n"
+            response += f"💰 *Выручка:* ${sell_price}\n"
+            response += f"🏠 *Теперь на {cell.name}:* 4 дома\n"
+        else:
+            # Продаем дом
+            cell.houses -= 1
+
+            response = f"🏠 *ДОМ ПРОДАН!*\n\n"
+            response += f"💰 *Выручка:* ${sell_price}\n"
+            response += f"🏠 *Теперь на {cell.name}:* {cell.houses} домов\n"
+
+        response += f"💵 *Баланс:* ${player.money}"
+
+        await update.message.reply_text(response, parse_mode="Markdown")
+
+        # Сохраняем состояние игры
+        game_manager.save_game_state(game.game_id)
+
+    except Exception as e:
+        print(f"❌ Ошибка в sell_house_command: {e}")
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+
+async def houses_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для просмотра информации о домах"""
+    user = update.effective_user
+
+    game = game_manager.get_player_game(user.id)
+    if not game:
+        await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+        return
+
+    player = game.players.get(user.id)
+    if not player:
+        await update.message.reply_text("❌ Игрок не найден!")
+        return
+
+    response = f"🏗 *УПРАВЛЕНИЕ ДОМАМИ*\n\n"
+    response += f"👤 *Игрок:* {player.full_name}\n"
+    response += f"💰 *Баланс:* ${player.money}\n\n"
+
+
+    # Информация о цветовых группах
+    color_groups = {}
+    for prop_id in player.properties:
+        cell = game.board.get_cell(prop_id)
+        if isinstance(cell, PropertyCell):
+            if cell.color_group not in color_groups:
+                color_groups[cell.color_group] = []
+            color_groups[cell.color_group].append(cell)
+
+    response += f"🎨 *ЦВЕТОВЫЕ ГРУППЫ:*\n"
+
+    for color, properties in color_groups.items():
+        total_in_group = len([c for c in game.board.cells
+                              if isinstance(c, PropertyCell) and c.color_group == color])
+
+        owned = len(properties)
+        houses_count = sum(p.houses for p in properties)
+        hotels_count = sum(1 for p in properties if p.hotel)
+
+        status = "✅ Полная" if owned == total_in_group else f"❌ {owned}/{total_in_group}"
+
+        response += f"\n*{color.upper()}*: {status}\n"
+
+        for prop in properties:
+            house_info = ""
+            if prop.hotel:
+                house_info = "🏨 ОТЕЛЬ"
+            elif prop.houses > 0:
+                house_info = f"🏠×{prop.houses}"
+            else:
+                house_info = "🏘 Нет домов"
+
+            mortgaged_info = "💳 Заложена" if prop.mortgaged else ""
+
+            response += f"  • {prop.name} ({prop.id}) - {house_info} {mortgaged_info}\n"
+
+    response += f"\n📋 *КОМАНДЫ:*\n"
+    response += f"• `/build_house` - показать доступные для строительства\n"
+    response += f"• `/build_hotel` - показать доступные для отелей\n"
+    response += f"• `/sell_house` - продать дом/отель\n"
+    response += f"• `/properties` - полная информация о недвижимости\n"
+
+    await update.message.reply_text(response, parse_mode="Markdown")
+
 
 
 async def jail_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1924,45 +2768,6 @@ async def jail_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
-
-
-async def clear_expired_offers(context: ContextTypes.DEFAULT_TYPE):
-    """Очистка просроченных предложений покупки"""
-    try:
-        if not context.user_data:
-            return
-
-        current_time = datetime.now().timestamp()
-
-        # Проходим по всем пользователям в context.user_data
-        for user_id, user_data in list(context.user_data.items()):
-            if user_data is None:
-                continue
-
-            if isinstance(user_data, dict) and 'buy_offer' in user_data:
-                buy_offer = user_data['buy_offer']
-                if buy_offer is None:
-                    continue
-
-                timestamp = buy_offer.get('timestamp', 0)
-                if current_time - timestamp > 30:  # 30 секунд
-                    print(f"🧹 Очищаем просроченное предложение для пользователя {user_id}")
-
-                    # Удаляем предложение
-                    if 'buy_offer' in user_data:
-                        del user_data['buy_offer']
-                    if 'buy_timer' in user_data:
-                        del user_data['buy_timer']
-
-                    # Также можно удалить пустой словарь пользователя
-                    if not user_data:
-                        del context.user_data[user_id]
-
-    except Exception as e:
-        print(f"❌ Ошибка при очистке предложений: {e}")
-        import traceback
-        traceback.print_exc()
-
 
 async def send_game_board(update: Update, context: ContextTypes.DEFAULT_TYPE,
                           game, caption: str = "🎮 Текущее состояние игры"):
@@ -2617,6 +3422,10 @@ def main():
         ("test_jail", test_jail_command),  # ← НОВАЯ КОМАНДА (опционально)
         #("build_house", build_house_command),
         ("board", board_command),
+        ("build_house", build_house_command),
+        ("build_hotel", build_hotel_command),
+        ("sell_house", sell_house_command),
+        ("houses", houses_command),
     ]
 
 

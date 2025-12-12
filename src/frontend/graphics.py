@@ -290,12 +290,12 @@ class BoardRenderer:
             )
 
     def _draw_houses(self, draw: ImageDraw, x: int, y: int, houses: int, hotel: bool, cell_size: int = 160):
-        """Рисуем дома/отели на собственности"""
+        """Рисуем дома/отели на собственности - разные формы на разных уровнях"""
         house_size = min(12, cell_size // 15)
         spacing = house_size + 2
 
         if hotel:
-            # Отель - красный квадрат с белой "H"
+            # Отель - красный квадрат с белой "H" на верхнем уровне
             hotel_x = x + cell_size // 3
             hotel_y = y - cell_size // 3
 
@@ -316,20 +316,68 @@ class BoardRenderer:
                 stroke_fill=(100, 0, 0)
             )
         elif houses > 0:
-            # Дома - зеленые треугольники в ряд
+            # Разные формы домов в зависимости от уровня
             start_x = x - (houses * spacing) // 2
 
             for i in range(houses):
                 house_x = start_x + i * spacing
                 house_y = y - cell_size // 3
 
-                # Треугольник (дом)
-                points = [
-                    (house_x, house_y - house_size),  # верх
-                    (house_x - house_size, house_y),  # левый низ
-                    (house_x + house_size, house_y)  # правый низ
-                ]
-                draw.polygon(points, fill=(0, 180, 0), outline=(0, 100, 0))
+                # Определяем уровень дома (1-4) для разных форм
+                house_level = i % 4 + 1
+
+                if house_level == 1:
+                    # Квадратный дом (первый уровень)
+                    draw.rectangle(
+                        [(house_x - house_size, house_y - house_size),
+                         (house_x + house_size, house_y + house_size)],
+                        fill=(0, 180, 0),
+                        outline=(0, 100, 0),
+                        width=1
+                    )
+                elif house_level == 2:
+                    # Треугольный дом (второй уровень)
+                    points = [
+                        (house_x, house_y - house_size),  # верх
+                        (house_x - house_size, house_y),  # левый низ
+                        (house_x + house_size, house_y)  # правый низ
+                    ]
+                    draw.polygon(points, fill=(0, 180, 0), outline=(0, 100, 0))
+                elif house_level == 3:
+                    # Дом с крышей (третий уровень) - квадрат с треугольником сверху
+                    # Основание
+                    draw.rectangle(
+                        [(house_x - house_size, house_y - house_size // 2),
+                         (house_x + house_size, house_y + house_size)],
+                        fill=(0, 180, 0),
+                        outline=(0, 100, 0),
+                        width=1
+                    )
+                    # Крыша
+                    roof_points = [
+                        (house_x, house_y - house_size),  # верх крыши
+                        (house_x - house_size, house_y - house_size // 2),  # левый низ крыши
+                        (house_x + house_size, house_y - house_size // 2)  # правый низ крыши
+                    ]
+                    draw.polygon(roof_points, fill=(0, 150, 0), outline=(0, 100, 0))
+                else:
+                    # Маленький небоскреб (четвертый уровень)
+                    # Основание
+                    draw.rectangle(
+                        [(house_x - house_size // 2, house_y - house_size * 1.5),
+                         (house_x + house_size // 2, house_y + house_size // 2)],
+                        fill=(0, 180, 0),
+                        outline=(0, 100, 0),
+                        width=1
+                    )
+                    # Верхняя часть
+                    draw.rectangle(
+                        [(house_x - house_size, house_y - house_size * 1.5),
+                         (house_x + house_size, house_y - house_size)],
+                        fill=(0, 160, 0),
+                        outline=(0, 100, 0),
+                        width=1
+                    )
 
     def _draw_players_legend(self, draw: ImageDraw, players: List[Dict], board_width: int, board_height: int):
         """
@@ -348,7 +396,7 @@ class BoardRenderer:
         legend_width = 300
         legend_height = 40 + len(players) * 35  # Высота зависит от количества игроков
 
-        # Отступы от краев (200 пикселей от верхнего и правого края)
+        # Отступы от краев (350 пикселей от верхнего и правого края)
         margin_top = 350
         margin_right = 350
 
@@ -384,7 +432,7 @@ class BoardRenderer:
         # Заголовок легенды
         draw.text(
             (legend_x + legend_width // 2, legend_y + 15),
-            "ИГРОКИ НА ПОЛЕ",
+            "ИГРОКИ",
             fill=(0, 0, 0),
             font=self.font_medium,
             anchor='mm',
@@ -439,7 +487,7 @@ class BoardRenderer:
             width=1
         )
 
-        # Текущая позиция (номер клетки)
+        # Номер клетки внутри круга
         position_text = f"{position}"
         draw.text(
             (x + 8, y),
@@ -460,126 +508,6 @@ class BoardRenderer:
             font=self.font_small,
             anchor='lm'
         )
-
-    def _draw_property_info(self, draw: ImageDraw, properties: Dict, board_width: int, board_height: int):
-        """Рисует информацию о собственностях (если нужно)"""
-        # Можно добавить отображение заложенных свойств и т.д.
-        pass
-
-    def render_board(self, game_data: Dict, include_legend: bool = True) -> Image.Image:
-        """
-        Рендерим поле с игроками и собственностью
-
-        Args:
-            game_data: {
-                "players": [
-                    {"id": 123, "name": "Игрок1", "position": 5, "color": "🔴", "money": 1500}
-                ],
-                "properties": {
-                    5: {"owner": 123, "houses": 2, "hotel": False},
-                    12: {"owner": 456, "houses": 0, "hotel": False}
-                }
-            }
-            include_legend: показывать ли легенду с игроками
-        """
-        # Создаем копию поля
-        board_copy = self.board_image.copy()
-        draw = ImageDraw.Draw(board_copy, 'RGBA')
-
-        width, height = board_copy.size
-
-        players = game_data.get("players", [])
-        properties = game_data.get("properties", {})
-
-        # Группируем игроков по клеткам
-        players_by_cell = {}
-        for player in players:
-            pos = player.get("position", 0)
-            if pos not in players_by_cell:
-                players_by_cell[pos] = []
-            players_by_cell[pos].append(player)
-
-        # 1. Сначала рисуем дома/отели (они должны быть под игроками)
-        for cell_id, prop_data in properties.items():
-            if cell_id in self.cell_coordinates:
-                x, y = self.cell_coordinates[cell_id]
-                houses = prop_data.get("houses", 0)
-                hotel = prop_data.get("hotel", False)
-
-                if houses > 0 or hotel:
-                    # Предполагаемый размер клетки для масштабирования
-                    cell_size = 160  # Примерный размер клетки в пикселях
-                    self._draw_houses(draw, x, y, houses, hotel, cell_size)
-
-        # 2. Рисуем игроков поверх домов
-        for cell_id, cell_players in players_by_cell.items():
-            if cell_id in self.cell_coordinates:
-                x, y = self.cell_coordinates[cell_id]
-                cell_size = 160  # Примерный размер клетки
-
-                for i, player in enumerate(cell_players):
-                    color = player.get("color", "🔴")
-                    self._draw_player_icon(draw, x, y, color, i, len(cell_players), cell_size)
-
-        # 3. Рисуем легенду с игроками (если включено)
-        if include_legend and players:
-            self._draw_players_legend(draw, players, width, height)
-
-        # 4. Информация о свойствах (опционально)
-        if properties:
-            self._draw_property_info(draw, properties, width, height)
-
-        return board_copy
-
-    def render_board(self, game_data: Dict, include_legend: bool = True) -> Image.Image:
-        """Рендерим поле с игроками и собственностью"""
-        # Создаем копию поля
-        board_copy = self.board_image.copy()
-        draw = ImageDraw.Draw(board_copy, 'RGBA')
-
-        width, height = board_copy.size
-
-        players = game_data.get("players", [])
-        properties = game_data.get("properties", {})
-
-        # Группируем игроков по клеткам
-        players_by_cell = {}
-        for player in players:
-            pos = player.get("position", 0)
-            if pos not in players_by_cell:
-                players_by_cell[pos] = []
-            players_by_cell[pos].append(player)
-
-        # 1. Рисуем обозначения собственности (сначала, под всем остальным)
-        if properties:
-            self._draw_property_ownership(draw, properties, players, width, height)
-
-        # 2. Рисуем дома/отели
-        for cell_id, prop_data in properties.items():
-            if cell_id in self.cell_coordinates:
-                x, y = self.cell_coordinates[cell_id]
-                houses = prop_data.get("houses", 0)
-                hotel = prop_data.get("hotel", False)
-
-                if houses > 0 or hotel:
-                    cell_size = 160
-                    self._draw_houses(draw, x, y, houses, hotel, cell_size)
-
-        # 3. Рисуем игроков поверх всего
-        for cell_id, cell_players in players_by_cell.items():
-            if cell_id in self.cell_coordinates:
-                x, y = self.cell_coordinates[cell_id]
-                cell_size = 160
-
-                for i, player in enumerate(cell_players):
-                    color = player.get("color", "🔴")
-                    self._draw_player_icon(draw, x, y, color, i, len(cell_players), cell_size)
-
-        # 4. Рисуем легенду с игроками
-        if include_legend and players:
-            self._draw_players_legend(draw, players, width, height)
-
-        return board_copy
 
     def _draw_property_ownership(self, draw: ImageDraw, properties: Dict, players: List[Dict],
                                  width: int, height: int):
@@ -627,6 +555,64 @@ class BoardRenderer:
                         )
                     except:
                         pass
+
+    def render_board(self, game_data: Dict, include_legend: bool = True) -> Image.Image:
+        """
+        Рендерим поле с игроками и собственностью
+
+        Включает только визуальные элементы:
+        - Игроки с их позициями
+        - Приобретенная собственность (цветные маркеры)
+        - Дома/отели с разными формами
+        - Легенда с информацией об игроках
+        """
+        # Создаем копию поля
+        board_copy = self.board_image.copy()
+        draw = ImageDraw.Draw(board_copy, 'RGBA')
+
+        width, height = board_copy.size
+
+        players = game_data.get("players", [])
+        properties = game_data.get("properties", {})
+
+        # Группируем игроков по клеткам
+        players_by_cell = {}
+        for player in players:
+            pos = player.get("position", 0)
+            if pos not in players_by_cell:
+                players_by_cell[pos] = []
+            players_by_cell[pos].append(player)
+
+        # 1. Рисуем обозначения собственности (под всем остальным)
+        if properties:
+            self._draw_property_ownership(draw, properties, players, width, height)
+
+        # 2. Рисуем дома/отели с разными формами
+        for cell_id, prop_data in properties.items():
+            if cell_id in self.cell_coordinates:
+                x, y = self.cell_coordinates[cell_id]
+                houses = prop_data.get("houses", 0)
+                hotel = prop_data.get("hotel", False)
+
+                if houses > 0 or hotel:
+                    cell_size = 160
+                    self._draw_houses(draw, x, y, houses, hotel, cell_size)
+
+        # 3. Рисуем игроков поверх всего
+        for cell_id, cell_players in players_by_cell.items():
+            if cell_id in self.cell_coordinates:
+                x, y = self.cell_coordinates[cell_id]
+                cell_size = 160
+
+                for i, player in enumerate(cell_players):
+                    color = player.get("color", "🔴")
+                    self._draw_player_icon(draw, x, y, color, i, len(cell_players), cell_size)
+
+        # 4. Рисуем легенду с игроками
+        if include_legend and players:
+            self._draw_players_legend(draw, players, width, height)
+
+        return board_copy
 
     def save_to_bytes(self, image: Image.Image, format: str = 'PNG', quality: int = 95) -> bytes:
         """Конвертируем изображение в bytes для отправки в Telegram"""
