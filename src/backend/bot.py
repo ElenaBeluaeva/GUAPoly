@@ -8,6 +8,16 @@ from typing import Dict, Any
 from .game_manager import GameManager
 from .game import GameState
 
+from src.backend.trade_manager import TradeManager
+from src.frontend.trade_interface import (
+    create_trade_player_selection,
+    create_trade_offer_selection,
+    create_trade_confirmation,
+    create_trade_response_buttons,
+    format_trade_notification,
+    create_trade_status_message
+)
+
 router = Router()
 
 
@@ -684,3 +694,76 @@ def setup_handlers(dp, game_manager: GameManager):
             )
 
         await message.answer(response, parse_mode="HTML")
+
+
+async def trade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начать торговлю - УПРОЩЕННАЯ ВЕРСИЯ"""
+    user = update.effective_user
+
+    game = game_manager.get_player_game(user.id)
+    if not game:
+        await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+        return
+
+    # Проверяем, что сейчас ход игрока
+    current_player = game.get_current_player()
+    if not current_player or current_player.user_id != user.id:
+        current_name = getattr(current_player, 'full_name', 'другой игрок') if current_player else 'другой игрок'
+        await update.message.reply_text(
+            f"⏳ *Сейчас не ваш ход!*\n"
+            f"Ходит: {escape_markdown(current_name)}",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Проверяем, что игрок не в тюрьме
+    if getattr(current_player, 'in_jail', False):
+        await update.message.reply_text(
+            "🔒 *Вы в тюрьме!*\n"
+            "Торговля недоступна пока вы в тюрьме.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Создаем простую клавиатуру для выбора игрока
+    keyboard = []
+
+    for player_id, player in game.players.items():
+        if player_id != user.id:
+            # Простая проверка доступности
+            player_name = getattr(player, 'full_name', f'Игрок {player_id}')
+            player_money = getattr(player, 'money', 0)
+            in_jail = getattr(player, 'in_jail', False)
+
+            if not in_jail:
+                prop_count = (
+                        len(getattr(player, 'properties', [])) +
+                        len(getattr(player, 'stations', [])) +
+                        len(getattr(player, 'utilities', []))
+                )
+
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"👤 {player_name} (${player_money}, 🏠{prop_count})",
+                        callback_data=f"trade_select_{game.game_id}_{player_id}"
+                    )
+                ])
+
+    if not keyboard:
+        await update.message.reply_text(
+            "❌ *Нет доступных игроков для торговли!*\n"
+            "Другие игроки либо в тюрьме, либо неактивны.",
+            parse_mode="Markdown"
+        )
+        return
+
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="trade_cancel")])
+
+    await update.message.reply_text(
+        f"🤝 *НАЧАТЬ ТОРГОВЛЮ*\n\n"
+        f"👤 *Вы:* {getattr(current_player, 'full_name', 'Игрок')}\n"
+        f"💰 *Баланс:* ${getattr(current_player, 'money', 0)}\n\n"
+        f"*Выберите игрока для торговли:*",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )

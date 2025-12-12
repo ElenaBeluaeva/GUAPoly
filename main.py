@@ -18,6 +18,7 @@ from src.frontend.graphics import board_renderer
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, MessageHandler, filters
 
 # Добавляем корень проекта и src/backend в путь
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +98,26 @@ def mention_player(user_id: int, username: str, full_name: str) -> str:
         return f"@{username}"
     else:
         return f"[{full_name}](tg://user?id={user_id})"
+
+
+def format_trade_summary(trade_items: dict, game, player_id=None) -> str:
+    """Форматировать сводку по сделке - УПРОЩЕННАЯ ВЕРСИЯ"""
+    lines = []
+
+    if trade_items.get('money', 0) > 0:
+        lines.append(f"💰 ${trade_items['money']}")
+
+    if trade_items.get('properties'):
+        for prop_id in trade_items['properties']:
+            cell = game.board.get_cell(prop_id)
+            if cell:
+                cell_name = getattr(cell, 'name', f'Собственность {prop_id}')
+                lines.append(f"🏠 {cell_name}")
+
+    if not lines:
+        lines.append("(ничего)")
+
+    return "\n".join(lines)
 # ========== КЛАВИАТУРЫ ==========
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -130,13 +151,13 @@ def get_game_actions_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура игровых действий"""
     keyboard = [
         [InlineKeyboardButton("🎲 Бросить кубики", callback_data="game_roll_dice")],
+        [InlineKeyboardButton("🤝 Торговля", callback_data="game_trade")],  # ← Уже есть, но проверим обработчик
         [InlineKeyboardButton("🗺️ Посмотреть поле", callback_data="game_view_board")],
         [InlineKeyboardButton("🏠 Мои свойства", callback_data="game_my_properties")],
         [InlineKeyboardButton("👥 Игроки", callback_data="game_players")],
         [InlineKeyboardButton("❌ Выйти из игры", callback_data="game_leave")]
     ]
     return InlineKeyboardMarkup(keyboard)
-
 
 # ========== КОМАНДЫ БОТА ==========
 
@@ -592,41 +613,26 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                       callback_data=f"skip_{game.game_id}_{current_player.position}")]
             ])
 
-
         elif cell_action["action"] == "pay_rent":
-
             rent = cell_action.get("rent", 0)
-
             owner_id = cell_action.get("owner_id")
-
             owner = game.players.get(owner_id) if owner_id else None
 
             if owner:
-
                 response_lines.append("")
-
                 response_lines.append("💸 Чужая собственность!")
-
                 response_lines.append(f"👤 Владелец: {owner.full_name}")
-
                 response_lines.append(f"💰 Рента: ${rent}")
 
                 # Автоматически списываем ренту
-
                 if current_player.deduct_money(rent):
-
                     owner.add_money(rent)
-
                     response_lines.append("✅ Рента уплачена")
-
                 else:
-
                     response_lines.append("❌ Недостаточно средств!")
-
                     current_player.status = "bankrupt"
 
             # ПЕРЕДАЧА ХОДА БЕЗ КНОПКИ
-
             if dice1 != dice2:
                 game.next_turn()
                 next_player = game.get_current_player()
@@ -640,19 +646,17 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
 
             # НЕ создаем клавиатуру - передача автоматическая
-
             keyboard = None
-
 
         elif cell_action["action"] == "pay_tax":
             tax = cell_action.get("amount", 0)
-            response_lines.append
             response_lines.append(f"💸 Налог: ${tax}")
             if current_player.deduct_money(tax):
                 game.free_parking_pot += tax
                 response_lines.append("✅ Налог уплачен")
             else:
                 response_lines.append("❌ Недостаточно средств!")
+
             # ПЕРЕДАЧА ХОДА БЕЗ КНОПКИ
             if dice1 != dice2:
                 game.next_turn()
@@ -667,7 +671,6 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
             # НЕ создаем клавиатуру
             keyboard = None
-
 
         elif cell_action["action"] == "free_parking":
             response_lines.append("")
@@ -680,6 +683,7 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 response_lines.append("🅿️ Бесплатная стоянка")
                 response_lines.append("💰 В банке: $0")
+
             # ПЕРЕДАЧА ХОДА БЕЗ КНОПКИ
             if dice1 != dice2:
                 game.next_turn()
@@ -694,8 +698,6 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
             # НЕ создаем клавиатуру
             keyboard = None
-
-
 
         elif cell_action["action"] in ["chance_card", "chest_card"]:
             card = cell_action.get("card")
@@ -708,6 +710,7 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if card_result.get("message"):
                     card_msg = card_result['message']
                     response_lines.append(f"📝 {card_msg}")
+
             # ПЕРЕДАЧА ХОДА БЕЗ КНОПКИ
             if dice1 != dice2:
                 game.next_turn()
@@ -722,7 +725,6 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
             # НЕ создаем клавиатуру
             keyboard = None
-
 
         else:
             # Для остальных действий
@@ -739,15 +741,17 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response_lines.append("🎲 ДУБЛЬ! Ходите еще раз!")
             # НЕ создаем клавиатуру
             keyboard = None
+
         # Создаем текстовое сообщение
         text_message = "\n".join(response_lines)
 
+        # ПОМЕНЯЙТЕ ЭТОТ БЛОК - УБЕРИТЕ ЗАПАСНОЙ ВАРИАНТ:
         try:
             # Создаем изображение игрового поля БЕЗ текста
             board_image = board_renderer.render_board(game_data)
             img_bytes = board_renderer.save_to_bytes(board_image)
 
-            # Отправляем изображение с текстом как подпись
+            # Отправляем ТОЛЬКО изображение с текстом как подпись
             if keyboard:
                 await update.message.reply_photo(
                     photo=img_bytes,
@@ -761,8 +765,8 @@ async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
         except Exception as e:
+            # ТОЛЬКО если не удалось создать/отправить изображение, отправляем текст
             print(f"❌ Ошибка создания изображения: {e}")
-            # Запасной вариант
             if keyboard:
                 await update.message.reply_text(text_message, reply_markup=keyboard)
             else:
@@ -1421,60 +1425,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user = query.from_user
 
+    # ДОБАВЬТЕ ЭТОТ ОТЛАДОЧНЫЙ ВЫВОД
+    print(f"\n🔘 ========== КНОПКА НАЖАТА ==========")
+    print(f"👤 Пользователь: {user.id} ({user.full_name})")
+    print(f"📱 Callback_data: {data}")
+    print(f"💬 Chat ID: {query.message.chat_id}")
+    print(f"📄 Message ID: {query.message.message_id}")
+    print(f"=====================================\n")
+
     try:
-        # Проверяем, относится ли кнопка к игровым действиям
-        if any(data.startswith(prefix) for prefix in ["buy_", "skip_", "pass_turn_", "jail_"]):
-            # Получаем game_id из callback_data
-            game_id = None
-            if data.startswith("buy_") or data.startswith("skip_") or data.startswith("pass_turn_"):
-                parts = data.split("_")
-                if len(parts) >= 2:
-                    game_id = parts[1]
-            elif data.startswith("jail_"):
-                parts = data.split("_")
-                if len(parts) >= 3:  # jail_roll_GAME_ID или jail_pay_GAME_ID
-                    game_id = parts[2]
-                else:
-                    await query.answer("❌ Неверный формат callback_data", show_alert=True)
-                    return
-
-            if not game_id:
-                await query.answer("❌ Не удалось определить игру", show_alert=True)
-                return
-
-            # Получаем игру
-            game = game_manager.get_game(game_id)
-            if not game:
-                await query.answer("❌ Игра не найдена", show_alert=True)
-                return
-
-            # Проверяем, что пользователь в этой игре
-            player = game.players.get(user.id)
-            if not player:
-                await query.answer("❌ Вы не в этой игре", show_alert=True)
-                return
-
-            # Проверяем, чей сейчас ход
-            current_player = game.get_current_player()
-            if not current_player:
-                await query.answer("❌ Нет текущего игрока", show_alert=True)
-                return
-
-            # Проверяем, что кнопку нажимает игрок, чей сейчас ход
-            if current_player.user_id != user.id:
-                current_player_name = current_player.full_name
-                await query.answer(
-                    f"⏳ Сейчас ходит {current_player_name}! Ждите своей очереди.",
-                    show_alert=True
-                )
-                return
-
-        # Обработка кнопки "Купить"
+        # ========== ОБРАБОТКА КНОПКИ ПОКУПКИ ==========
         if data.startswith("buy_"):
+            print(f"🎯 Кнопка ПОКУПКА нажата")
             parts = data.split("_")
+            print(f"🔍 Части callback_data: {parts}")
+
             if len(parts) >= 3:
                 game_id = parts[1]
                 position = int(parts[2])
+
+                print(f"✅ Извлечено: game_id={game_id}, position={position}")
 
                 game = game_manager.get_game(game_id)
                 if not game:
@@ -1486,7 +1456,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.answer("❌ Вы не в этой игре", show_alert=True)
                     return
 
-                # Дополнительная проверка на текущего игрока (уже проверено выше, но для надежности)
+                # Дополнительная проверка на текущего игрока
                 current_player = game.get_current_player()
                 if current_player and current_player.user_id != user.id:
                     await query.answer(f"❌ Сейчас ходит {current_player.full_name}!", show_alert=True)
@@ -1512,6 +1482,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 success = game.board.buy_property(player, position)
 
                 if success:
+                    print(f"✅ Покупка успешна!")
+
                     # Очищаем предложение покупки
                     key = f'buy_offer_{game_id}_{position}'
                     context.user_data.pop(key, None)
@@ -1571,8 +1543,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not double:
                         # Уведомляем следующего игрока
                         next_player = game.get_current_player()
-                        if next_player:
-                            await notify_next_player(game, context, user.id)
+                        if next_player and next_player.user_id != user.id:
+                            try:
+                                await notify_next_player(game, context, user.id)
+                            except Exception as e:
+                                print(f"❌ Не удалось уведомить следующего игрока: {e}")
                     else:
                         # При дубле отправляем сообщение игроку
                         await context.bot.send_message(
@@ -1603,7 +1578,273 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 else:
                     await query.answer("❌ Не удалось купить", show_alert=True)
+            else:
+                print(f"❌ Неверный формат callback_data для покупки: {data}")
+                await query.answer("❌ Ошибка формата кнопки", show_alert=True)
 
+            return
+
+        # ========== ОБРАБОТКА КНОПКИ ПРОПУСКА ==========
+        elif data.startswith("skip_"):
+            print(f"🎯 Кнопка ПРОПУСК нажата")
+            parts = data.split("_")
+            print(f"🔍 Части callback_data: {parts}")
+
+            if len(parts) >= 3:
+                game_id = parts[1]
+                position = int(parts[2])
+
+                print(f"✅ Извлечено: game_id={game_id}, position={position}")
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена", show_alert=True)
+                    return
+
+                player = game.players.get(user.id)
+                if not player:
+                    await query.answer("❌ Вы не в этой игре", show_alert=True)
+                    return
+
+                cell = game.board.get_cell(position)
+                if not cell:
+                    await query.answer("❌ Клетка не найдена", show_alert=True)
+                    return
+
+                # Очищаем предложение покупки
+                key = f'buy_offer_{game_id}_{position}'
+                context.user_data.pop(key, None)
+
+                # Проверяем дубль
+                double = False
+                buy_offer_key = f'buy_offer_{game_id}_{position}'
+                if buy_offer_key in context.user_data:
+                    double = context.user_data[buy_offer_key].get('double', False)
+                    context.user_data.pop(buy_offer_key, None)
+
+                # Формируем текст
+                text_lines = []
+                text_lines.append(f"⏭️ {player.full_name} пропустил(а) покупку {cell.name}")
+                text_lines.append("")
+                text_lines.append(f"💵 Цена: ${cell.price if hasattr(cell, 'price') else 0}")
+                text_lines.append(f"💰 Ваш баланс: ${player.money}")
+                text_lines.append("")
+
+                if not double:
+                    # Переход хода ТОЛЬКО если не дубль
+                    game.next_turn()
+
+                    # Получаем следующего игрока
+                    next_player = game.get_current_player()
+                    if next_player:
+                        text_lines.append(f"⏭️ Ход переходит")
+                        text_lines.append(f"🎯 {next_player.full_name}")
+
+                else:
+                    # При дубле игрок ходит еще раз
+                    text_lines.append("🎲 ДУБЛЬ!")
+                    text_lines.append("🎯 Ходите еще раз!")
+                    text_lines.append("")
+                    text_lines.append("Используйте /roll")
+
+                # Объединяем все строки
+                final_response = "\n".join(text_lines)
+
+                # Обновляем сообщение
+                await query.edit_message_caption(
+                    caption=final_response,
+                    parse_mode=None,
+                    reply_markup=None
+                )
+
+                if not double:
+                    # Уведомляем следующего игрока ТОЛЬКО если не дубль
+                    next_player = game.get_current_player()
+                    if next_player and next_player.user_id != user.id:
+                        try:
+                            await notify_next_player(game, context, user.id)
+                        except Exception as e:
+                            print(f"❌ Не удалось уведомить следующего игрока: {e}")
+                else:
+                    # При дубле отправляем сообщение игроку
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=f"🎲 ДУБЛЬ!\n🎯 Ходите еще раз!\n\nИспользуйте /roll"
+                    )
+
+                game_manager.save_game_state(game_id)
+
+                # Уведомляем других игроков о пропуске
+                for other_id, other_player in game.players.items():
+                    if other_id != user.id:
+                        try:
+                            other_text = f"⏭️ {player.full_name} пропустил(а) покупку {cell.name}"
+
+                            # Добавляем информацию о следующем игроке только если не дубль
+                            if not double:
+                                next_player = game.get_current_player()
+                                if next_player:
+                                    other_text += f"\n⏭️ Следующий ход: {next_player.full_name}"
+
+                            await context.bot.send_message(
+                                chat_id=other_id,
+                                text=other_text
+                            )
+                        except Exception as e:
+                            print(f"❌ Не удалось уведомить игрока {other_id}: {e}")
+            else:
+                print(f"❌ Неверный формат callback_data для пропуска: {data}")
+                await query.answer("❌ Ошибка формата кнопки", show_alert=True)
+
+            return
+
+        # ========== ОБРАБОТКА КНОПОК ТОРГОВЛИ ==========
+
+        # 1. Кнопка ПРИНЯТЬ сделку
+        if data.startswith("trade_accept_"):
+            print(f"🎯 Кнопка ПРИНЯТЬ сделку нажата")
+            trade_id = data.replace("trade_accept_", "")
+            print(f"🔍 Trade ID: {trade_id}")
+
+            # Находим игру с этой сделкой
+            game = None
+            for game_obj in game_manager.games.values():
+                if hasattr(game_obj, 'trade_manager'):
+                    trade = game_obj.trade_manager.get_trade(trade_id)
+                    if trade:
+                        game = game_obj
+                        break
+
+            if not game:
+                await query.answer("❌ Предложение не найдено или истекло!", show_alert=True)
+                await query.edit_message_text("❌ *Предложение не найдено или истекло!*", parse_mode="Markdown")
+                return
+
+            print(f"✅ Игра найдена: {game.game_id}")
+
+            # Проверяем, что пользователь может принять сделку
+            if trade.to_player_id != user.id:
+                await query.answer("❌ Это предложение не для вас!", show_alert=True)
+                return
+
+            # Принимаем сделку
+            result = game.accept_trade(trade_id, user.id)
+
+            if result.get('success'):
+                # Обновляем сообщение у получателя
+                await query.edit_message_text(
+                    f"✅ *СДЕЛКА ПРИНЯТА!*\n\n"
+                    f"🎉 Вы приняли предложение об обмене.\n\n"
+                    f"📊 *Детали сделки:*\n"
+                    f"• Обмен успешно выполнен\n"
+                    f"• Деньги и собственность переведены\n"
+                    f"• Сделка завершена",
+                    parse_mode="Markdown"
+                )
+
+                # Уведомляем отправителя
+                from_player = game.players.get(trade.from_player_id)
+                if from_player:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=from_player.user_id,
+                            text=f"🎉 *ВАШЕ ПРЕДЛОЖЕНИЕ ПРИНЯТО!*\n\n"
+                                 f"👤 Игрок {game.players[trade.to_player_id].full_name} принял(а) ваше предложение.\n\n"
+                                 f"📊 *Детали сделки:*\n"
+                                 f"• Сделка успешно завершена\n"
+                                 f"• Все активности обменяны\n"
+                                 f"• ID сделки: `{trade_id}`",
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        print(f"❌ Не удалось уведомить отправителя: {e}")
+
+                # Уведомляем всех игроков в игре
+                for player_id, player in game.players.items():
+                    if player_id not in [trade.from_player_id, trade.to_player_id]:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=player_id,
+                                text=f"🤝 *СДЕЛКА ЗАВЕРШЕНА!*\n\n"
+                                     f"🎮 Игроки {game.players[trade.from_player_id].full_name} и "
+                                     f"{game.players[trade.to_player_id].full_name} завершили сделку.\n"
+                                     f"📊 ID сделки: `{trade_id}`",
+                                parse_mode="Markdown"
+                            )
+                        except Exception as e:
+                            print(f"❌ Не удалось уведомить игрока {player_id}: {e}")
+
+            else:
+                error_msg = result.get('error', 'Неизвестная ошибка')
+                await query.answer(f"❌ Ошибка: {error_msg}", show_alert=True)
+                await query.edit_message_text(
+                    f"❌ *Не удалось завершить сделку:* {error_msg}",
+                    parse_mode="Markdown"
+                )
+
+            return
+
+        # 2. Кнопка ОТКЛОНИТЬ сделку
+        elif data.startswith("trade_reject_"):
+            print(f"🎯 Кнопка ОТКЛОНИТЬ сделку нажата")
+            trade_id = data.replace("trade_reject_", "")
+            print(f"🔍 Trade ID: {trade_id}")
+
+            # Находим игру с этой сделкой
+            game = None
+            for game_obj in game_manager.games.values():
+                if hasattr(game_obj, 'trade_manager'):
+                    trade = game_obj.trade_manager.get_trade(trade_id)
+                    if trade:
+                        game = game_obj
+                        break
+
+            if not game:
+                await query.answer("❌ Предложение не найдено!", show_alert=True)
+                await query.edit_message_text("❌ *Предложение не найдено!*", parse_mode="Markdown")
+                return
+
+            # Проверяем, что пользователь может отклонить сделку
+            if trade.to_player_id != user.id:
+                await query.answer("❌ Это предложение не для вас!", show_alert=True)
+                return
+
+            # Отклоняем сделку
+            result = game.reject_trade(trade_id, user.id)
+
+            if result.get('success'):
+                # Обновляем сообщение у получателя
+                await query.edit_message_text(
+                    f"❌ *СДЕЛКА ОТКЛОНЕНА!*\n\n"
+                    f"Вы отклонили предложение об обмене.\n\n"
+                    f"📊 *Детали:*\n"
+                    f"• Предложение удалено\n"
+                    f"• Обмен не состоялся\n"
+                    f"• Сделка отменена",
+                    parse_mode="Markdown"
+                )
+
+                # Уведомляем отправителя
+                from_player = game.players.get(trade.from_player_id)
+                if from_player:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=from_player.user_id,
+                            text=f"❌ *ВАШЕ ПРЕДЛОЖЕНИЕ ОТКЛОНЕНО!*\n\n"
+                                 f"👤 Игрок {game.players[trade.to_player_id].full_name} отклонил(а) ваше предложение.\n\n"
+                                 f"📊 *Детали:*\n"
+                                 f"• Предложение отклонено\n"
+                                 f"• Обмен не состоялся\n"
+                                 f"• ID сделки: `{trade_id}`",
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        print(f"❌ Не удалось уведомить отправителя: {e}")
+            else:
+                error_msg = result.get('error', 'Неизвестная ошибка')
+                await query.answer(f"❌ Ошибка: {error_msg}", show_alert=True)
+
+            return
         # Обработка кнопки "Пропустить"
         elif data.startswith("skip_"):
             parts = data.split("_")
@@ -1708,127 +1949,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         except Exception as e:
                             print(f"❌ Не удалось уведомить игрока {other_id}: {e}")
 
-        # Обработка кнопки "Передать ход" - ИСПРАВЛЕННАЯ ВЕРСИЯ
-        # #elif data.startswith("pass_turn_"):
-        #     # Разбираем callback_data: pass_turn_<game_id> или pass_turn_<game_id>_<dice1>_<dice2>
-        #     parts = data.split("_")
-        #
-        #     if len(parts) < 3:  # pass_turn_<game_id> как минимум
-        #         await query.answer("❌ Неверный формат callback_data", show_alert=True)
-        #         return
-        #
-        #     game_id = parts[2]  # Третья часть это game_id
-        #
-        #     # Проверяем, есть ли информация о кубиках
-        #     double_info = None
-        #     if len(parts) >= 5:  # pass_turn_<game_id>_<dice1>_<dice2>
-        #         try:
-        #             dice1 = int(parts[3])
-        #             dice2 = int(parts[4])
-        #             double_info = (dice1 == dice2)
-        #         except:
-        #             double_info = None
-        #
-        #     game = game_manager.get_game(game_id)
-        #     if not game:
-        #         await query.answer("❌ Игра не найдена", show_alert=True)
-        #         return
-        #
-        #     player = game.players.get(user.id)
-        #     if not player:
-        #         await query.answer("❌ Вы не в этой игре", show_alert=True)
-        #         return
-        #
-        #     # Проверяем, может ли игрок передать ход
-        #     current_player = game.get_current_player()
-        #     if not current_player:
-        #         await query.answer("❌ Нет текущего игрока", show_alert=True)
-        #         return
-        #
-        #     # Проверяем, что кнопку нажимает текущий игрок
-        #     if current_player.user_id != user.id:
-        #         # Проверяем, не устарела ли кнопка
-        #         # Возможно, ход уже перешел, но кнопка осталась
-        #         await query.answer(
-        #             f"⏳ Сейчас ходит {current_player.full_name}! Ждите своей очереди.",
-        #             show_alert=True
-        #         )
-        #         return
-        #
-        #     # Сохраняем имя текущего игрока перед передачей хода
-        #     old_player_name = current_player.full_name
-        #     old_player_color = current_player.color if hasattr(current_player, 'color') else '🎲'
-        #
-        #     # ВАЖНО: Проверяем, был ли дубль
-        #     # Если был дубль - НЕ передаем ход
-        #     if double_info is True:
-        #         # Был дубль - игрок ходит еще раз
-        #         transfer_text = f"🎲 ДУБЛЬ!\n🎯 {old_player_color} {old_player_name} ходит еще раз!"
-        #
-        #         # Обновляем сообщение
-        #         try:
-        #             if query.message.caption:
-        #                 await query.edit_message_caption(
-        #                     caption=transfer_text,
-        #                     parse_mode=None,
-        #                     reply_markup=None
-        #                 )
-        #             else:
-        #                 await query.edit_message_text(
-        #                     text=transfer_text,
-        #                     parse_mode=None,
-        #                     reply_markup=None
-        #                 )
-        #         except Exception as e:
-        #             print(f"❌ Ошибка при обновлении сообщения: {e}")
-        #             await query.answer(transfer_text, show_alert=True)
-        #
-        #         # Уведомляем игрока, что он ходит еще раз
-        #         await context.bot.send_message(
-        #             chat_id=user.id,
-        #             text=f"🎲 ДУБЛЬ!\n🎯 Ваш ход продолжается!\n\nИспользуйте /roll чтобы бросить кубики снова"
-        #         )
-        #
-        #     else:
-        #         # НЕ было дубля - передаем ход
-        #         game.next_turn()
-        #
-        #         # Получаем следующего игрока
-        #         next_player = game.get_current_player()
-        #
-        #         if next_player:
-        #             next_player_color = next_player.color if hasattr(next_player, 'color') else '🎲'
-        #             transfer_text = f"⏭️ Ход передан\n\n"
-        #             transfer_text += f"🎲 Предыдущий: {old_player_color} {old_player_name}\n"
-        #             transfer_text += f"🎯 Следующий: {next_player_color} {next_player.full_name}"
-        #         else:
-        #             transfer_text = f"⏭️ {old_player_name} передал(а) ход"
-        #
-        #         # Обновляем сообщение
-        #         try:
-        #             if query.message.caption:
-        #                 await query.edit_message_caption(
-        #                     caption=transfer_text,
-        #                     parse_mode=None,
-        #                     reply_markup=None
-        #                 )
-        #             else:
-        #                 await query.edit_message_text(
-        #                     text=transfer_text,
-        #                     parse_mode=None,
-        #                     reply_markup=None
-        #                 )
-        #         except Exception as e:
-        #             print(f"❌ Ошибка при обновлении сообщения: {e}")
-        #             await query.answer(transfer_text, show_alert=True)
-        #
-        #         # Уведомляем следующего игрока
-        #         if next_player and next_player.user_id != user.id:
-        #             await notify_next_player(game, context, user.id)
-        #
-        #     # Сохраняем состояние игры
-        #     game_manager.save_game_state(game_id)
-
         # Обработка кнопок тюрьмы
         elif data.startswith("jail_"):
             parts = data.split("_")
@@ -1838,7 +1958,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 game = game_manager.get_game(game_id)
                 if not game:
-                    await query.answer("❌ Игра не найдена", show_alert=True)
+                    await query.answer("❌ Игра не найдена!", show_alert=True)
                     return
 
                 player = game.players.get(user.id)
@@ -1929,6 +2049,416 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     next_player = game.get_current_player()
                     if next_player and next_player.user_id != user.id:
                         await notify_next_player(game, context, user.id)
+
+        # ========== ОБРАБОТКА ТОРГОВЛИ ==========
+
+        # Выбор игрока для торговли
+        elif data.startswith("trade_select_"):
+            parts = data.split("_")
+            if len(parts) >= 4:
+                game_id = parts[2]
+                to_player_id = int(parts[3])
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.edit_message_text("❌ Игра не найдена!")
+                    return
+
+                # Проверяем, что игрок может торговать
+                current_player = game.get_current_player()
+                if not current_player or current_player.user_id != user.id:
+                    await query.answer("❌ Сейчас не ваш ход!", show_alert=True)
+                    return
+
+                # Сохраняем данные торговли
+                trade_key = f"trade_{user.id}_{to_player_id}"
+                context.user_data[trade_key] = {
+                    'game_id': game_id,
+                    'from_player_id': user.id,
+                    'to_player_id': to_player_id,
+                    'step': 'offer',
+                    'offer': {'money': 0, 'properties': []},
+                    'request': {'money': 0, 'properties': []}
+                }
+
+                # Показываем выбор предложения
+                try:
+                    from src.frontend.trade_interface import create_trade_offer_selection
+                    text, keyboard = create_trade_offer_selection(
+                        game, user.id, to_player_id, 'offer'
+                    )
+                    await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+                except ImportError:
+                    await query.edit_message_text(
+                        f"🤝 *ТОРГОВЛЯ С {game.players[to_player_id].full_name}*\n\n"
+                        f"Выберите что предлагаете:",
+                        parse_mode="Markdown"
+                    )
+
+        # Выбор денег в сделке
+        elif data.startswith("trade_money_"):
+            parts = data.split("_")
+            if len(parts) >= 6:
+                game_id = parts[2]
+                from_player_id = int(parts[3])
+                to_player_id = int(parts[4])
+                action = parts[5]  # offer или request
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена!", show_alert=True)
+                    return
+
+                # Сохраняем состояние для ввода суммы
+                context.user_data['awaiting_trade_money'] = {
+                    'game_id': game_id,
+                    'from_player_id': from_player_id,
+                    'to_player_id': to_player_id,
+                    'action': action,
+                    'message_id': query.message.message_id,
+                    'chat_id': query.message.chat_id
+                }
+
+                player = game.players[from_player_id] if action == 'offer' else game.players[to_player_id]
+                max_money = player.money
+
+                await query.edit_message_text(
+                    f"💰 *ВВЕДИТЕ СУММУ ДЕНЕГ*\n\n"
+                    f"Максимально: ${max_money}\n\n"
+                    f"📝 *Отправьте число в чат:*\n"
+                    f"(например: 100, 500, 1000)\n\n"
+                    f"❌ Для отмены используйте /cancel",
+                    parse_mode="Markdown"
+                )
+
+        # Выбор собственности в сделке
+        elif data.startswith("trade_prop_"):
+            parts = data.split("_")
+            if len(parts) >= 7:
+                game_id = parts[2]
+                from_player_id = int(parts[3])
+                to_player_id = int(parts[4])
+                prop_id = int(parts[5])
+                action = parts[6]  # offer или request
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена!", show_alert=True)
+                    return
+
+                # Получаем данные торговли
+                trade_key = f"trade_{from_player_id}_{to_player_id}"
+                trade_data = context.user_data.get(trade_key)
+
+                if not trade_data:
+                    await query.answer("❌ Данные торговли утеряны!", show_alert=True)
+                    return
+
+                # Добавляем или удаляем собственность
+                target_dict = trade_data['offer'] if action == 'offer' else trade_data['request']
+
+                if prop_id in target_dict['properties']:
+                    target_dict['properties'].remove(prop_id)
+                    await query.answer("✅ Собственность удалена из сделки")
+                else:
+                    target_dict['properties'].append(prop_id)
+                    await query.answer("✅ Собственность добавлена в сделку")
+
+                # Сохраняем изменения
+                context.user_data[trade_key] = trade_data
+
+                # Обновляем интерфейс
+                try:
+                    from src.frontend.trade_interface import create_trade_offer_selection
+                    text, keyboard = create_trade_offer_selection(
+                        game, from_player_id, to_player_id,
+                        trade_data['step'], trade_data['offer'], trade_data['request']
+                    )
+                    await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+                except ImportError:
+                    await query.answer("✅ Собственность обновлена")
+
+        # Следующий шаг
+        elif data.startswith("trade_next_"):
+            parts = data.split("_")
+            if len(parts) >= 6:
+                game_id = parts[2]
+                from_player_id = int(parts[3])
+                to_player_id = int(parts[4])
+                action = parts[5]  # offer или request
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена!", show_alert=True)
+                    return
+
+                trade_key = f"trade_{from_player_id}_{to_player_id}"
+                trade_data = context.user_data.get(trade_key)
+
+                if not trade_data:
+                    await query.answer("❌ Данные торговли утеряны!", show_alert=True)
+                    return
+
+                # Переходим к следующему шагу
+                if trade_data['step'] == 'offer':
+                    trade_data['step'] = 'request'
+                    try:
+                        from src.frontend.trade_interface import create_trade_offer_selection
+                        text, keyboard = create_trade_offer_selection(
+                            game, from_player_id, to_player_id,
+                            'request', trade_data['offer'], trade_data['request']
+                        )
+                    except ImportError:
+                        text = f"🤝 *ЧТО ПРОСИТЕ ВЗАМЕН?*\n\nВыберите что хотите получить от {game.players[to_player_id].full_name}"
+                        keyboard = None
+                elif trade_data['step'] == 'request':
+                    trade_data['step'] = 'confirm'
+                    try:
+                        from src.frontend.trade_interface import create_trade_confirmation
+                        text, keyboard = create_trade_confirmation(
+                            game, from_player_id, to_player_id,
+                            trade_data['offer'], trade_data['request']
+                        )
+                    except ImportError:
+                        text = f"🤝 *ПОДТВЕРЖДЕНИЕ СДЕЛКИ*\n\nГотовы отправить предложение?"
+                        keyboard = None
+
+                context.user_data[trade_key] = trade_data
+                await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+        # Назад
+        elif data.startswith("trade_back_"):
+            parts = data.split("_")
+            if len(parts) >= 5:
+                game_id = parts[2]
+                from_player_id = int(parts[3])
+                to_player_id = int(parts[4])
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена!", show_alert=True)
+                    return
+
+                trade_key = f"trade_{from_player_id}_{to_player_id}"
+                trade_data = context.user_data.get(trade_key)
+
+                if not trade_data:
+                    await query.answer("❌ Данные торговли утеряны!", show_alert=True)
+                    return
+
+                # Возвращаемся к предыдущему шагу
+                if trade_data['step'] == 'request':
+                    trade_data['step'] = 'offer'
+                    try:
+                        from src.frontend.trade_interface import create_trade_offer_selection
+                        text, keyboard = create_trade_offer_selection(
+                            game, from_player_id, to_player_id,
+                            'offer', trade_data['offer'], trade_data['request']
+                        )
+                        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+                    except ImportError:
+                        await query.edit_message_text("↩️ Возврат к выбору предложения")
+
+                context.user_data[trade_key] = trade_data
+
+        # Сброс
+        elif data.startswith("trade_reset_"):
+            parts = data.split("_")
+            if len(parts) >= 6:
+                game_id = parts[2]
+                from_player_id = int(parts[3])
+                to_player_id = int(parts[4])
+                action = parts[5]  # offer или request
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена!", show_alert=True)
+                    return
+
+                trade_key = f"trade_{from_player_id}_{to_player_id}"
+                trade_data = context.user_data.get(trade_key)
+
+                if not trade_data:
+                    await query.answer("❌ Данные торговли утеряны!", show_alert=True)
+                    return
+
+                # Сбрасываем текущий шаг
+                if action == 'offer':
+                    trade_data['offer'] = {'money': 0, 'properties': []}
+                else:
+                    trade_data['request'] = {'money': 0, 'properties': []}
+
+                context.user_data[trade_key] = trade_data
+
+                # Обновляем интерфейс
+                try:
+                    from src.frontend.trade_interface import create_trade_offer_selection
+                    text, keyboard = create_trade_offer_selection(
+                        game, from_player_id, to_player_id,
+                        trade_data['step'], trade_data['offer'], trade_data['request']
+                    )
+                    await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+                except ImportError:
+                    await query.answer("🔄 Текущий выбор сброшен", show_alert=True)
+
+        # Отправка предложения
+        elif data.startswith("trade_send_"):
+            parts = data.split("_")
+            if len(parts) >= 5:
+                game_id = parts[2]
+                from_player_id = int(parts[3])
+                to_player_id = int(parts[4])
+
+                game = game_manager.get_game(game_id)
+                if not game:
+                    await query.answer("❌ Игра не найдена!", show_alert=True)
+                    return
+
+                # Проверяем, что это тот игрок, который создает предложение
+                if query.from_user.id != from_player_id:
+                    await query.answer("❌ Вы не можете отправить это предложение!", show_alert=True)
+                    return
+
+                trade_key = f"trade_{from_player_id}_{to_player_id}"
+                trade_data = context.user_data.get(trade_key)
+
+                if not trade_data:
+                    await query.answer("❌ Данные торговли утеряны!", show_alert=True)
+                    return
+
+                # Проверяем, что предложение не пустое
+                offer_empty = (trade_data['offer'].get('money', 0) == 0 and
+                               len(trade_data['offer'].get('properties', [])) == 0)
+                request_empty = (trade_data['request'].get('money', 0) == 0 and
+                                 len(trade_data['request'].get('properties', [])) == 0)
+
+                if offer_empty and request_empty:
+                    await query.answer("❌ Предложение пустое! Добавьте что-то в сделку.", show_alert=True)
+                    return
+
+                try:
+                    # Создаем предложение в игре
+                    result = game.propose_trade(
+                        from_player_id=from_player_id,
+                        to_player_id=to_player_id,
+                        offer=trade_data['offer'],
+                        request=trade_data['request']
+                    )
+
+                    if result.get('success'):
+                        # Удаляем временные данные
+                        context.user_data.pop(trade_key, None)
+
+                        # Уведомляем получателя
+                        try:
+                            from_player = game.players[from_player_id]
+                            to_player = game.players[to_player_id]
+
+                            # ВАЖНО: Получаем trade_id из результата
+                            trade_id = result['trade_id']
+                            print(f"✅ Создано предложение с ID: {trade_id}")
+
+                            # Создаем понятное уведомление
+                            notification_text = f"🤝 *НОВОЕ ПРЕДЛОЖЕНИЕ ОБМЕНА!*\n\n"
+                            notification_text += f"👤 *От:* {from_player.full_name}\n\n"
+
+                            # Форматируем предложение
+                            if trade_data['offer'].get('money', 0) > 0:
+                                notification_text += f"💰 *Предлагает деньги:* ${trade_data['offer']['money']}\n"
+
+                            if trade_data['offer'].get('properties'):
+                                notification_text += "🏠 *Предлагает собственность:*\n"
+                                for prop_id in trade_data['offer']['properties']:
+                                    cell = game.board.get_cell(prop_id)
+                                    if cell:
+                                        notification_text += f"• {cell.name}\n"
+
+                            notification_text += f"\n📥 *Просит взамен:*\n"
+
+                            if trade_data['request'].get('money', 0) > 0:
+                                notification_text += f"💰 *Деньги:* ${trade_data['request']['money']}\n"
+
+                            if trade_data['request'].get('properties'):
+                                notification_text += "🏠 *Собственность:*\n"
+                                for prop_id in trade_data['request']['properties']:
+                                    cell = game.board.get_cell(prop_id)
+                                    if cell:
+                                        notification_text += f"• {cell.name}\n"
+
+                            notification_text += f"\n⏰ *Предложение действует 5 минут*\n"
+                            notification_text += f"🎮 *Игра:* {game.game_id}\n\n"
+                            notification_text += "*Выберите действие:*"
+
+                            # ВАЖНО: Правильно формируем callback_data
+                            # ТОЛЬКО trade_id, без лишних параметров
+                            keyboard = InlineKeyboardMarkup([
+                                [
+                                    InlineKeyboardButton(
+                                        "✅ Принять",
+                                        callback_data=f"trade_accept_{trade_id}"  # ← БЕЗ game_id и других параметров
+                                    ),
+                                    InlineKeyboardButton(
+                                        "❌ Отклонить",
+                                        callback_data=f"trade_reject_{trade_id}"  # ← БЕЗ game_id и других параметров
+                                    )
+                                ]
+                            ])
+
+                            print(f"📤 Отправляем уведомление игроку {to_player_id} с кнопками:")
+                            print(f"   Принять: trade_accept_{trade_id}")
+                            print(f"   Отклонить: trade_reject_{trade_id}")
+
+                            # Отправляем уведомление получателю
+                            await context.bot.send_message(
+                                chat_id=to_player_id,
+                                text=notification_text,
+                                reply_markup=keyboard,
+                                parse_mode="Markdown"
+                            )
+
+                            print(f"✅ Уведомление отправлено игроку {to_player_id}")
+
+                        except Exception as e:
+                            print(f"❌ Не удалось отправить уведомление: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            # Но предложение все равно создано
+
+                        # Уведомляем отправителя об успехе
+                        await query.edit_message_text(
+                            f"✅ *Предложение успешно отправлено!*\n\n"
+                            f"👤 *Кому:* {game.players[to_player_id].full_name}\n"
+                            f"📊 *ID предложения:* `{trade_id}`\n"
+                            f"⏳ *Действует до:* 5 минут\n\n"
+                            f"📤 *Ваше предложение:*\n"
+                            f"{format_trade_summary(trade_data['offer'], game, from_player_id)}\n\n"
+                            f"📥 *Ваш запрос:*\n"
+                            f"{format_trade_summary(trade_data['request'], game, to_player_id)}\n\n"
+                            f"ℹ️ *Для управления предложением:*\n"
+                            f"• Просмотреть: `/my_trades`\n"
+                            f"• Отменить: `/trade_cancel {trade_id}`",
+                            parse_mode="Markdown"
+                        )
+
+                        # Сохраняем состояние игры
+                        game_manager.save_game_state(game_id)
+
+                    else:
+                        # Ошибка при создании предложения
+                        error_msg = result.get('error', 'Неизвестная ошибка')
+                        await query.edit_message_text(
+                            f"❌ *Ошибка отправки:* {error_msg}",
+                            parse_mode="Markdown"
+                        )
+
+                except Exception as e:
+                    print(f"❌ Ошибка при отправке предложения: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    await query.edit_message_text(
+                        f"❌ *Ошибка:* {str(e)}",
+                        parse_mode="Markdown"
+                    )
 
         # Главное меню (доступно всем)
         elif data == "menu_new_game":
@@ -2039,6 +2569,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка обработки кнопки {data}: {e}")
         await query.answer("⚠️ Произошла ошибка", show_alert=True)
 
+    except Exception as e:
+        logger.error(f"Ошибка обработки кнопки {data}: {e}")
+        import traceback
+        traceback.print_exc()
+        await query.answer("⚠️ Произошла ошибка", show_alert=True)
+
 async def properties_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Полная рабочая версия /properties"""
     user = update.effective_user
@@ -2068,108 +2604,138 @@ async def properties_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not player:
         await update.message.reply_text("❌ Ошибка: игрок не найден в игре!")
         return
-    player_color = player.color if hasattr(player, 'color') else "🎲"
-    response = f"{player_color} *СОБСТВЕННОСТЬ {escape_markdown(getattr(player, 'full_name', 'Игрок'))}*\n\n"
-    response += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-    # ОСНОВНАЯ ИНФОРМАЦИЯ
-    response += f"💰 *Баланс:* ${getattr(player, 'money', 0)}\n"
-    response += f"📍 *Позиция:* {getattr(player, 'position', 0)}\n"
-    response += f"🎨 *Цвет фишки:* {player_color}\n"
-    response += f"🎮 *Статус:* {escape_markdown(getattr(getattr(player, 'status', None), 'value', 'активен'))}\n\n"
+    try:
+        # Экранируем ВСЕ пользовательские данные
+        player_color = escape_markdown(player.color if hasattr(player, 'color') else "🎲")
+        player_name = escape_markdown(getattr(player, 'full_name', 'Игрок'))
+        player_status = escape_markdown(getattr(getattr(player, 'status', None), 'value', 'активен'))
 
-    response += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        response = f"{player_color} *СОБСТВЕННОСТЬ {player_name}*\n\n"
+        response += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-    # УЛИЦЫ (С ДОПОЛНЕНИЕМ ИНФОРМАЦИИ О ДОМАХ)
-    properties = getattr(player, 'properties', [])
-    if properties:
-        response += f"🏠 *УЛИЦЫ ({len(properties)}):*\n"
-        for prop_id in properties:
-            cell = game.board.get_cell(prop_id)
-            if cell and hasattr(cell, 'name'):
-                # Информация о домах/отеле
-                houses_info = ""
-                if hasattr(cell, 'hotel') and cell.hotel:
-                    houses_info = "🏨 ОТЕЛЬ"
-                elif hasattr(cell, 'houses') and cell.houses > 0:
-                    houses_info = f"🏠×{cell.houses}"
+        # ОСНОВНАЯ ИНФОРМАЦИЯ
+        response += f"💰 *Баланс:* ${getattr(player, 'money', 0)}\n"
+        response += f"📍 *Позиция:* {getattr(player, 'position', 0)}\n"
+        response += f"🎨 *Цвет фишки:* {player_color}\n"
+        response += f"🎮 *Статус:* {player_status}\n\n"
 
-                # Информация о залоге
-                mortgaged_info = "💳 ЗАЛОЖЕНА" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
+        response += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-                # Цветовая группа
-                color_info = f"🎨 {cell.color_group}" if hasattr(cell, 'color_group') else ""
+        # УЛИЦЫ (С ДОПОЛНЕНИЕМ ИНФОРМАЦИИ О ДОМАХ)
+        properties = getattr(player, 'properties', [])
+        if properties:
+            response += f"🏠 *УЛИЦЫ ({len(properties)}):*\n"
+            for prop_id in properties:
+                cell = game.board.get_cell(prop_id)
+                if cell and hasattr(cell, 'name'):
+                    # Экранируем название улицы
+                    cell_name = escape_markdown(cell.name)
 
-                response += f"• *{escape_markdown(cell.name)}* ({prop_id})"
-                if houses_info:
-                    response += f" {houses_info}"
-                if mortgaged_info:
-                    response += f" {mortgaged_info}"
-                if color_info:
-                    response += f" {color_info}"
-                response += f"\n"
-    else:
-        response += "🏠 *УЛИЦЫ:* нет\n"
+                    # Информация о домах/отеле
+                    houses_info = ""
+                    if hasattr(cell, 'hotel') and cell.hotel:
+                        houses_info = "🏨 ОТЕЛЬ"
+                    elif hasattr(cell, 'houses') and cell.houses > 0:
+                        houses_info = f"🏠×{cell.houses}"
 
-    response += "\n"
+                    # Информация о залоге
+                    mortgaged_info = "💳 ЗАЛОЖЕНА" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
 
-    # ВОКЗАЛЫ
-    stations = getattr(player, 'stations', [])
-    if stations:
-        response += f"🚂 *МЕТРО ({len(stations)}):*\n"
-        for station_id in stations:
-            cell = game.board.get_cell(station_id)
-            if cell and hasattr(cell, 'name'):
-                mortgaged_info = "💳 ЗАЛОЖЕН" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
-                response += f"• *{escape_markdown(cell.name)}* {mortgaged_info}\n"
-    else:
-        response += "🚂 *МЕТРО:* нет\n"
+                    # Цветовая группа
+                    color_info = ""
+                    if hasattr(cell, 'color_group'):
+                        color_info = f"🎨 {escape_markdown(cell.color_group)}"
 
-    response += "\n"
+                    response += f"• *{cell_name}* ({prop_id})"
+                    if houses_info:
+                        response += f" {houses_info}"
+                    if mortgaged_info:
+                        response += f" {mortgaged_info}"
+                    if color_info:
+                        response += f" {color_info}"
+                    response += f"\n"
+        else:
+            response += "🏠 *УЛИЦЫ:* нет\n"
 
-    # ПРЕДПРИЯТИЯ
-    utilities = getattr(player, 'utilities', [])
-    if utilities:
-        response += f"⚡️ *ПРЕДПРИЯТИЯ ({len(utilities)}):*\n"
-        for util_id in utilities:
-            cell = game.board.get_cell(util_id)
-            if cell and hasattr(cell, 'name'):
-                mortgaged_info = "💳 ЗАЛОЖЕНО" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
-                response += f"• *{escape_markdown(cell.name)}* {mortgaged_info}\n"
-    else:
-        response += "⚡️ *ПРЕДПРИЯТИЯ:* нет\n"
+        response += "\n"
 
-    response += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        # ВОКЗАЛЫ
+        stations = getattr(player, 'stations', [])
+        if stations:
+            response += f"🚂 *МЕТРО ({len(stations)}):*\n"
+            for station_id in stations:
+                cell = game.board.get_cell(station_id)
+                if cell and hasattr(cell, 'name'):
+                    cell_name = escape_markdown(cell.name)
+                    mortgaged_info = "💳 ЗАЛОЖЕН" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
+                    response += f"• *{cell_name}* {mortgaged_info}\n"
+        else:
+            response += "🚂 *МЕТРО:* нет\n"
+
+        response += "\n"
 
 
-    # Если нет собственности
-    if not properties and not stations and not utilities:
-        response += "😢 *У вас пока нет собственности!*\n\n"
-        response += "📋 *Советы для начала:*\n"
-        response += "1. Бросайте кубики: `/roll`\n"
-        response += "2. Покупайте свободную недвижимость: `/buy`\n"
-        response += "3. Собирайте цветовые группы\n"
-        response += "4. Стройте дома для увеличения ренты\n\n"
+        # ПРЕДПРИЯТИЯ
+        utilities = getattr(player, 'utilities', [])
+        if utilities:
+            response += f"⚡️ *ПРЕДПРИЯТИЯ ({len(utilities)}):*\n"
+            for util_id in utilities:
+                cell = game.board.get_cell(util_id)
+                if cell and hasattr(cell, 'name'):
+                    cell_name = escape_markdown(cell.name)
+                    mortgaged_info = "💳 ЗАЛОЖЕНО" if hasattr(cell, 'mortgaged') and cell.mortgaged else ""
+                    response += f"• *{cell_name}* {mortgaged_info}\n"
+        else:
+            response += "⚡️ *ПРЕДПРИЯТИЯ:* нет\n"
 
-    # Статистика
-    response += "📊 *СТАТИСТИКА:*\n"
-    response += f"• Получено ренты: ${getattr(player, 'total_rent_received', 0)}\n"
-    response += f"• Уплачено ренты: ${getattr(player, 'total_rent_paid', 0)}\n"
-    response += f"• Куплено недвижимости: {len(properties)}\n"
-    response += f"• Карт освобождения: {getattr(player, 'get_out_of_jail_cards', 0)}\n"
+        response += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-    # ДОБАВЛЯЕМ РАЗДЕЛ С КОМАНДАМИ ДЛЯ УПРАВЛЕНИЯ ДОМАМИ
-    response += "\n🏗 *УПРАВЛЕНИЕ ДОМАМИ:*\n"
-    response += "• `/houses` - информация о домах\n"
-    response += "• `/build_house` - построить дом\n"
-    response += "• `/build_hotel` - построить отель\n"
-    response += "• `/sell_house` - продать дом/отель\n"
+        # Если нет собственности
+        if not properties and not stations and not utilities:
+            response += "😢 *У вас пока нет собственности!*\n\n"
+            response += "📋 *Советы для начала:*\n"
+            response += "1. Бросайте кубики: `/roll`\n"
+            response += "2. Покупайте свободную недвижимость: `/buy`\n"
+            response += "3. Собирайте цветовые группы\n"
+            response += "4. Стройте дома для увеличения ренты\n\n"
 
-    # Добавляем кнопки управления (если они есть)
-    await update.message.reply_text(
-        response,
-        parse_mode="Markdown"
-    )
+        # Статистика
+        response += "📊 *СТАТИСТИКА:*\n"
+        response += f"• Получено ренты: ${getattr(player, 'total_rent_received', 0)}\n"
+        response += f"• Уплачено ренты: ${getattr(player, 'total_rent_paid', 0)}\n"
+        response += f"• Куплено недвижимости: {len(properties)}\n"
+        response += f"• Карт освобождения: {getattr(player, 'get_out_of_jail_cards', 0)}\n"
+
+        # ДОБАВЛЯЕМ РАЗДЕЛ С КОМАНДАМИ ДЛЯ УПРАВЛЕНИЯ ДОМАМИ
+        response += "\n🏗 *УПРАВЛЕНИЕ ДОМАМИ:*\n"
+        response += "• `/houses` - информация о домах\n"
+        response += "• `/build_house` - построить дом\n"
+        response += "• `/build_hotel` - построить отель\n"
+        response += "• `/sell_house` - продать дом/отель\n"
+
+        # Проверяем длину сообщения
+        if len(response) > 4000:
+            response = response[:4000] + "\n\n... (сообщение обрезано)"
+            print(f"⚠️ Сообщение слишком длинное: {len(response)} символов")
+
+        # Отправляем сообщение
+        await update.message.reply_text(
+            response,
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        print(f"❌ Ошибка при формировании ответа: {e}")
+        print(f"Длина response: {len(response) if 'response' in locals() else 'N/A'}")
+
+        # Отправляем простой текст без Markdown в случае ошибки
+        simple_response = f"Собственность игрока {player_name}\n\n"
+        simple_response += f"Баланс: ${getattr(player, 'money', 0)}\n"
+        simple_response += f"Улицы: {len(properties) if 'properties' in locals() else 0}\n"
+        simple_response += f"Метро: {len(stations) if 'stations' in locals() else 0}\n"
+        simple_response += f"Предприятия: {len(utilities) if 'utilities' in locals() else 0}"
+
 
     print(f"✅ Информация отправлена пользователю {user.id}")
 async def build_house_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2660,6 +3226,420 @@ async def houses_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response, parse_mode="Markdown")
 
 
+# async def my_trades_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Показать мои активные предложения торговли"""
+#     user = update.effective_user
+#
+#     game = game_manager.get_player_game(user.id)
+#     if not game:
+#         await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+#         return
+#
+#     # Получаем торговые предложения
+#     if not hasattr(game, 'trade_manager'):
+#         await update.message.reply_text("❌ *Менеджер торговли не инициализирован!*", parse_mode="Markdown")
+#         return
+#
+#     # Проверяем, есть ли метод get_player_trades
+#     if not hasattr(game.trade_manager, 'get_player_trades'):
+#         await update.message.reply_text(
+#             "❌ *Функция просмотра торговли недоступна!*\n"
+#             "Обновите версию игры или обратитесь к администратору.",
+#             parse_mode="Markdown"
+#         )
+#         return
+#
+#     try:
+#         trades = game.trade_manager.get_player_trades(user.id)
+#     except Exception as e:
+#         logger.error(f"Ошибка получения торгов: {e}")
+#         await update.message.reply_text(
+#             f"❌ *Ошибка загрузки предложений:* {str(e)}",
+#             parse_mode="Markdown"
+#         )
+#         return
+#
+#     if not trades.get('incoming') and not trades.get('outgoing'):
+#         await update.message.reply_text(
+#             "📭 *У вас нет активных предложений торговли.*",
+#             parse_mode="Markdown"
+#         )
+#         return
+#
+#     response = "🤝 *ВАШИ ТОРГОВЫЕ ПРЕДЛОЖЕНИЯ*\n\n"
+#
+#     incoming_trades = trades.get('incoming', [])
+#     outgoing_trades = trades.get('outgoing', [])
+#
+#     if incoming_trades:
+#         response += "📥 *ВХОДЯЩИЕ ПРЕДЛОЖЕНИЯ:*\n\n"
+#         for trade in incoming_trades:
+#             from_player = game.players.get(trade.from_player_id)
+#             from_name = from_player.full_name if from_player else f"Игрок {trade.from_player_id}"
+#
+#             response += f"👤 *От:* {from_name}\n"
+#             response += f"📊 *ID:* `{trade.trade_id}`\n"
+#
+#             # Форматируем предложение
+#             if trade.offer.get('money', 0) > 0:
+#                 response += f"💰 *Предлагает:* ${trade.offer['money']}\n"
+#
+#             if trade.offer.get('properties'):
+#                 response += "🏠 *Предлагает собственность:*\n"
+#                 for prop_id in trade.offer['properties']:
+#                     cell = game.board.get_cell(prop_id)
+#                     if cell:
+#                         response += f"  • {cell.name}\n"
+#
+#             response += f"\n📥 *Просит взамен:*\n"
+#
+#             if trade.request.get('money', 0) > 0:
+#                 response += f"💰 *Деньги:* ${trade.request['money']}\n"
+#
+#             if trade.request.get('properties'):
+#                 response += "🏠 *Собственность:*\n"
+#                 for prop_id in trade.request['properties']:
+#                     cell = game.board.get_cell(prop_id)
+#                     if cell:
+#                         response += f"  • {cell.name}\n"
+#
+#             # Время
+#             if hasattr(trade, 'expires_at'):
+#                 from datetime import datetime
+#                 now = datetime.now()
+#                 if hasattr(trade.expires_at, 'strftime'):
+#                     expires_str = trade.expires_at.strftime('%H:%M:%S')
+#                     response += f"⏰ *Истекает:* {expires_str}\n"
+#                 elif isinstance(trade.expires_at, str):
+#                     response += f"⏰ *Истекает:* {trade.expires_at}\n"
+#
+#             response += f"\n👉 *Для ответа:*\n"
+#             response += f"• Принять: `/trade_accept {trade.trade_id}`\n"
+#             response += f"• Отклонить: `/trade_reject {trade.trade_id}`\n"
+#             response += "─" * 20 + "\n\n"
+#
+#     if outgoing_trades:
+#         response += "\n📤 *ИСХОДЯЩИЕ ПРЕДЛОЖЕНИЯ:*\n\n"
+#         for trade in outgoing_trades:
+#             to_player = game.players.get(trade.to_player_id)
+#             to_name = to_player.full_name if to_player else f"Игрок {trade.to_player_id}"
+#
+#             response += f"👤 *Кому:* {to_name}\n"
+#             response += f"📊 *ID:* `{trade.trade_id}`\n"
+#
+#             # Форматируем предложение
+#             if trade.offer.get('money', 0) > 0:
+#                 response += f"💰 *Вы предлагаете:* ${trade.offer['money']}\n"
+#
+#             if trade.offer.get('properties'):
+#                 response += "🏠 *Вы предлагаете собственность:*\n"
+#                 for prop_id in trade.offer['properties']:
+#                     cell = game.board.get_cell(prop_id)
+#                     if cell:
+#                         response += f"  • {cell.name}\n"
+#
+#             response += f"\n📥 *Вы просите:*\n"
+#
+#             if trade.request.get('money', 0) > 0:
+#                 response += f"💰 *Деньги:* ${trade.request['money']}\n"
+#
+#             if trade.request.get('properties'):
+#                 response += "🏠 *Собственность:*\n"
+#                 for prop_id in trade.request['properties']:
+#                     cell = game.board.get_cell(prop_id)
+#                     if cell:
+#                         response += f"  • {cell.name}\n"
+#
+#             response += f"\n👉 Отменить: `/trade_cancel {trade.trade_id}`\n"
+#             response += "─" * 20 + "\n\n"
+#
+#     # Разбиваем на части, если сообщение слишком длинное
+#     if len(response) > 4000:
+#         parts = [response[i:i + 4000] for i in range(0, len(response), 4000)]
+#         for part in parts:
+#             await update.message.reply_text(part, parse_mode="Markdown")
+#     else:
+#         await update.message.reply_text(response, parse_mode="Markdown")
+
+async def my_trades_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать мои активные предложения торговли"""
+    user = update.effective_user
+
+    game = game_manager.get_player_game(user.id)
+    if not game:
+        await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+        return
+
+    # Получаем торговые предложения
+    if not hasattr(game, 'trade_manager'):
+        await update.message.reply_text("❌ *Менеджер торговли не инициализирован!*", parse_mode="Markdown")
+        return
+
+    # Получаем все активные предложения
+    all_trades = []
+    if hasattr(game.trade_manager, 'active_trades'):
+        all_trades = list(game.trade_manager.active_trades.values())
+
+    # Фильтруем предложения для текущего игрока
+    player_trades = {
+        'incoming': [],
+        'outgoing': []
+    }
+
+    for trade in all_trades:
+        if hasattr(trade, 'status') and trade.status == 'pending':
+            if trade.to_player_id == user.id:
+                player_trades['incoming'].append(trade)
+            elif trade.from_player_id == user.id:
+                player_trades['outgoing'].append(trade)
+
+    if not player_trades['incoming'] and not player_trades['outgoing']:
+        await update.message.reply_text(
+            "📭 *У вас нет активных предложений торговли.*\n\n"
+            "Чтобы создать предложение:\n"
+            "• Используйте `/trade` во время своего хода\n"
+            "• Выберите игрока для торговли\n"
+            "• Укажите что предлагаете и что просите",
+            parse_mode="Markdown"
+        )
+        return
+
+    response = "🤝 *ВАШИ ТОРГОВЫЕ ПРЕДЛОЖЕНИЯ*\n\n"
+
+    incoming_trades = player_trades['incoming']
+    outgoing_trades = player_trades['outgoing']
+
+    if incoming_trades:
+        response += "📥 *ВХОДЯЩИЕ ПРЕДЛОЖЕНИЯ:*\n\n"
+        for trade in incoming_trades:
+            from_player = game.players.get(trade.from_player_id)
+            from_name = from_player.full_name if from_player else f"Игрок {trade.from_player_id}"
+
+            # Получаем короткий ID сделки
+            trade_id_short = trade.trade_id
+            if len(trade_id_short) > 15:
+                trade_id_short = trade_id_short[-12:]  # Берем последние 12 символов
+
+            response += f"🔸 *Предложение от {from_name}*\n"
+            response += f"   ID: `{trade_id_short}`\n"
+
+            # Форматируем предложение
+            if trade.offer.get('money', 0) > 0:
+                response += f"   💰 *Предлагает:* ${trade.offer['money']}\n"
+
+            if trade.offer.get('properties'):
+                response += "   🏠 *Предлагает собственность:*\n"
+                for prop_id in trade.offer['properties']:
+                    cell = game.board.get_cell(prop_id)
+                    if cell:
+                        response += f"      • {cell.name}\n"
+
+            if trade.request.get('money', 0) > 0:
+                response += f"   💰 *Просит:* ${trade.request['money']}\n"
+
+            if trade.request.get('properties'):
+                response += "   🏠 *Просит собственность:*\n"
+                for prop_id in trade.request['properties']:
+                    cell = game.board.get_cell(prop_id)
+                    if cell:
+                        response += f"      • {cell.name}\n"
+
+            # Команды для принятия/отклонения
+            response += f"\n   👉 *Действия:*\n"
+            response += f"   • Принять: `/accept_trade {trade.trade_id}`\n"
+            response += f"   • Отклонить: `/reject_trade {trade.trade_id}`\n"
+            response += f"   ───────────────\n\n"
+
+    if outgoing_trades:
+        response += "📤 *ИСХОДЯЩИЕ ПРЕДЛОЖЕНИЯ:*\n\n"
+        for trade in outgoing_trades:
+            to_player = game.players.get(trade.to_player_id)
+            to_name = to_player.full_name if to_player else f"Игрок {trade.to_player_id}"
+
+            # Получаем короткий ID сделки
+            trade_id_short = trade.trade_id
+            if len(trade_id_short) > 15:
+                trade_id_short = trade_id_short[-12:]  # Берем последние 12 символов
+
+            response += f"🔹 *Предложение для {to_name}*\n"
+            response += f"   ID: `{trade_id_short}`\n"
+
+            # Форматируем предложение
+            if trade.offer.get('money', 0) > 0:
+                response += f"   💰 *Вы предлагаете:* ${trade.offer['money']}\n"
+
+            if trade.offer.get('properties'):
+                response += "   🏠 *Вы предлагаете собственность:*\n"
+                for prop_id in trade.offer['properties']:
+                    cell = game.board.get_cell(prop_id)
+                    if cell:
+                        response += f"      • {cell.name}\n"
+
+            if trade.request.get('money', 0) > 0:
+                response += f"   💰 *Вы просите:* ${trade.request['money']}\n"
+
+            if trade.request.get('properties'):
+                response += "   🏠 *Вы просите собственность:*\n"
+                for prop_id in trade.request['properties']:
+                    cell = game.board.get_cell(prop_id)
+                    if cell:
+                        response += f"      • {cell.name}\n"
+
+            # Команда для отмены
+            response += f"\n   👉 *Действие:*\n"
+            response += f"   • Отменить: `/cancel_trade {trade.trade_id}`\n"
+            response += f"   ───────────────\n\n"
+
+    # Добавляем подсказки
+    response += "💡 *ПОДСКАЗКИ:*\n"
+    response += "• Используйте полный ID сделки из сообщений выше\n"
+    response += "• Предложения действуют 5 минут\n"
+    response += "• После истечения времени предложения удаляются автоматически\n"
+
+    # Разбиваем на части, если сообщение слишком длинное
+    if len(response) > 4000:
+        parts = [response[i:i + 4000] for i in range(0, len(response), 4000)]
+        for part in parts:
+            await update.message.reply_text(part, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(response, parse_mode="Markdown")
+
+async def trade_accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Принять предложение торговли через команду"""
+    user = update.effective_user
+
+    if not context.args:
+        await update.message.reply_text(
+            "❌ *Укажите ID предложения!*\n\n"
+            "Пример: `/trade_accept trade_123_456_789`\n\n"
+            "Чтобы увидеть свои предложения, используйте:\n"
+            "• `/my_trades` - все предложения\n"
+            "• `/games` - информация об игре",
+            parse_mode="Markdown"
+        )
+        return
+
+    trade_id = context.args[0]
+
+    # Находим игру с этим предложением
+    game = None
+    for game_id, g in game_manager.games.items():
+        if hasattr(g, 'trade_manager'):
+            trade = g.trade_manager.get_trade(trade_id)
+            if trade:
+                game = g
+                break
+
+    if not game:
+        await update.message.reply_text(
+            "❌ *Предложение не найдено!*\n\n"
+            "Возможные причины:\n"
+            "1. Предложение уже обработано\n"
+            "2. Истек срок действия\n"
+            "3. Неверный ID предложения\n\n"
+            "Используйте `/my_trades` для актуального списка.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Принимаем предложение
+    result = game.accept_trade(trade_id, user.id)
+
+    if result.get('success'):
+        await update.message.reply_text(
+            f"✅ *Сделка принята!*\n\n"
+            f"{result.get('message', 'Обмен успешно выполнен.')}\n\n"
+            f"📊 Деньги и собственность переведены между игроками.",
+            parse_mode="Markdown"
+        )
+    else:
+        error_msg = result.get('error', 'Неизвестная ошибка')
+        await update.message.reply_text(
+            f"❌ *Ошибка:* {error_msg}",
+            parse_mode="Markdown"
+        )
+
+
+async def trade_reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отклонить предложение торговли через команду"""
+    user = update.effective_user
+
+    if not context.args:
+        await update.message.reply_text(
+            "❌ *Укажите ID предложения!*\n\n"
+            "Пример: `/trade_reject trade_123_456_789`",
+            parse_mode="Markdown"
+        )
+        return
+
+    trade_id = context.args[0]
+
+    # Находим игру
+    game = None
+    for game_id, g in game_manager.games.items():
+        if hasattr(g, 'trade_manager'):
+            trade = g.trade_manager.get_trade(trade_id)
+            if trade:
+                game = g
+                break
+
+    if not game:
+        await update.message.reply_text("❌ *Предложение не найдено!*", parse_mode="Markdown")
+        return
+
+    # Отклоняем предложение
+    result = game.reject_trade(trade_id, user.id)
+
+    if result.get('success'):
+        await update.message.reply_text(
+            f"❌ *Предложение отклонено*\n\n"
+            f"{result.get('message', 'Вы отклонили предложение об обмене.')}",
+            parse_mode="Markdown"
+        )
+    else:
+        error_msg = result.get('error', 'Неизвестная ошибка')
+        await update.message.reply_text(f"❌ *Ошибка:* {error_msg}", parse_mode="Markdown")
+
+
+async def trade_cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отменить свое предложение торговли через команду"""
+    user = update.effective_user
+
+    if not context.args:
+        await update.message.reply_text(
+            "❌ *Укажите ID предложения!*\n\n"
+            "Пример: `/trade_cancel trade_123_456_789`",
+            parse_mode="Markdown"
+        )
+        return
+
+    trade_id = context.args[0]
+
+    # Находим игру
+    game = None
+    for game_id, g in game_manager.games.items():
+        if hasattr(g, 'trade_manager'):
+            trade = g.trade_manager.get_trade(trade_id)
+            if trade:
+                game = g
+                break
+
+    if not game:
+        await update.message.reply_text("❌ *Предложение не найдено!*", parse_mode="Markdown")
+        return
+
+    # Отменяем предложение
+    result = game.cancel_trade(trade_id, user.id)
+
+    if result.get('success'):
+        await update.message.reply_text(
+            f"🚫 *Предложение отменено*\n\n"
+            f"{result.get('message', 'Вы отменили свое предложение об обмене.')}",
+            parse_mode="Markdown"
+        )
+    else:
+        error_msg = result.get('error', 'Неизвестная ошибка')
+        await update.message.reply_text(f"❌ *Ошибка:* {error_msg}", parse_mode="Markdown")
 
 async def jail_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик /jail - действия в тюрьме"""
@@ -3379,7 +4359,314 @@ async def test_jail_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+async def trade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начать торговлю"""
+    user = update.effective_user
 
+    game = game_manager.get_player_game(user.id)
+    if not game:
+        await update.message.reply_text("❌ *Вы не в игре!*", parse_mode="Markdown")
+        return
+
+    # Проверяем, что сейчас ход игрока
+    current_player = game.get_current_player()
+    if not current_player or current_player.user_id != user.id:
+        await update.message.reply_text(
+            f"⏳ *Сейчас не ваш ход!*\n"
+            f"Ходит: {escape_markdown(current_player.full_name)}",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Проверяем, что игрок не в тюрьме
+    if current_player.in_jail:
+        await update.message.reply_text(
+            "🔒 *Вы в тюрьме!*\n"
+            "Торговля недоступна пока вы в тюрьме.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Импортируем функцию создания интерфейса
+    try:
+        from src.frontend.trade_interface import create_trade_player_selection
+    except ImportError:
+        # Простой интерфейс если модуль не найден
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🤝 Торговля временно недоступна", callback_data="none")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="trade_cancel")]
+        ])
+
+        await update.message.reply_text(
+            f"🤝 *ТОРГОВЛЯ*\n\n"
+            f"⚠️ Модуль торговли временно недоступен\n"
+            f"Попробуйте позже или используйте другие команды.",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        return
+
+    # Показываем выбор игрока
+    keyboard = create_trade_player_selection(game, user.id)
+
+    await update.message.reply_text(
+        f"🤝 *НАЧАТЬ ТОРГОВЛЮ*\n\n"
+        f"👤 *Ваши данные:*\n"
+        f"• Имя: {current_player.full_name}\n"
+        f"• Баланс: ${current_player.money}\n"
+        f"• Собственность: {len(current_player.properties) + len(current_player.stations) + len(current_player.utilities)} объектов\n\n"
+        f"*Выберите игрока для торговли:*",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+
+async def cleanup_expired_trades(context: ContextTypes.DEFAULT_TYPE):
+    """Очистить истекшие предложения торговли"""
+    logger.info("🧹 Запущена очистка истекших предложений торговли...")
+
+    expired_count = 0
+
+    for game_id, game in list(game_manager.games.values()):
+        try:
+            # Проверяем, есть ли менеджер торговли
+            if hasattr(game, 'trade_manager'):
+                # Сохраняем количество активных предложений до очистки
+                before_count = len(game.trade_manager.active_trades)
+
+                # Очищаем истекшие предложения
+                if hasattr(game.trade_manager, 'cleanup_expired_trades'):
+                    game.trade_manager.cleanup_expired_trades()
+
+                # Считаем сколько очищено
+                after_count = len(game.trade_manager.active_trades)
+                cleaned = before_count - after_count
+                expired_count += cleaned
+
+                if cleaned > 0:
+                    logger.info(f"В игре {game_id} очищено {cleaned} истекших предложений")
+
+                    # Сохраняем состояние игры
+                    game_manager.save_game_state(game_id)
+
+        except Exception as e:
+            logger.error(f"Ошибка очистки торговли в игре {game_id}: {e}")
+
+    if expired_count > 0:
+        logger.info(f"✅ Очистка завершена. Удалено {expired_count} истекших предложений")
+    else:
+        logger.info("✅ Нет истекших предложений для очистки")
+
+
+async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик текстового ввода (для суммы денег в торговле) - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    user = update.effective_user
+    text = update.message.text.strip()
+
+    logger.info(f"Пользователь {user.id} отправил текст: {text}")
+
+    # Проверяем, ожидаем ли мы ввод суммы для торговли
+    if 'awaiting_trade_money' not in context.user_data:
+        logger.info(f"Нет ожидания ввода для пользователя {user.id}")
+        return  # Игнорируем, если не ожидаем ввод
+
+    trade_data = context.user_data['awaiting_trade_money']
+    logger.info(f"Ожидание ввода для торговли: {trade_data}")
+
+    try:
+        # Удаляем все пробелы и проверяем, что это число
+        clean_text = ''.join(text.split())
+
+        # Проверяем специальные команды
+        if clean_text.lower() == '/cancel':
+            await cancel_command(update, context)
+            return
+
+        if clean_text.lower() == '0':
+            amount = 0
+        else:
+            if not clean_text.isdigit():
+                await update.message.reply_text(
+                    "❌ *Некорректный ввод!*\n\n"
+                    "Пожалуйста, введите только цифры (например: 100, 500, 1500).\n"
+                    "Или отправьте '0' для отмены.",
+                    parse_mode="Markdown"
+                )
+                return
+            amount = int(clean_text)
+
+        if amount < 0:
+            raise ValueError("Отрицательное число")
+
+        game = game_manager.get_game(trade_data['game_id'])
+        if not game:
+            await update.message.reply_text("❌ Игра не найдена!")
+            del context.user_data['awaiting_trade_money']
+            return
+
+        # Получаем игрока, чьи деньги мы устанавливаем
+        player_id = trade_data['from_player_id'] if trade_data['action'] == 'offer' else trade_data['to_player_id']
+        player = game.players.get(player_id)
+
+        if not player:
+            await update.message.reply_text("❌ Игрок не найден!")
+            del context.user_data['awaiting_trade_money']
+            return
+
+        # Проверяем максимальную сумму
+        if amount > player.money:
+            await update.message.reply_text(
+                f"❌ *Слишком большая сумма!*\n\n"
+                f"💰 *Максимально:* ${player.money}\n"
+                f"💵 *Вы ввели:* ${amount}\n\n"
+                f"Попробуйте снова:",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Сохраняем сумму в данных торговли
+        trade_key = f"trade_{trade_data['from_player_id']}_{trade_data['to_player_id']}"
+        trade_info = context.user_data.get(trade_key)
+
+        if not trade_info:
+            await update.message.reply_text("❌ Данные торговли утеряны!")
+            del context.user_data['awaiting_trade_money']
+            return
+
+        # Обновляем сумму в предложении/запросе
+        if trade_data['action'] == 'offer':
+            trade_info['offer']['money'] = amount
+            logger.info(f"Сохранена сумма предложения: ${amount} от игрока {player_id}")
+        else:
+            trade_info['request']['money'] = amount
+            logger.info(f"Сохранена сумма запроса: ${amount} от игрока {player_id}")
+
+        # Сохраняем обновленные данные
+        context.user_data[trade_key] = trade_info
+
+        # Удаляем состояние ожидания
+        del context.user_data['awaiting_trade_money']
+
+        # Создаем клавиатуру для возврата в интерфейс торговли
+        try:
+            from src.frontend.trade_interface import create_trade_offer_selection
+
+            # Получаем обновленный интерфейс
+            text_msg, keyboard = create_trade_offer_selection(
+                game,
+                trade_info['from_player_id'],
+                trade_info['to_player_id'],
+                trade_info['step'],
+                trade_info['offer'],
+                trade_info['request']
+            )
+
+            # Отправляем сообщение с интерфейсом
+            await update.message.reply_text(
+                text_msg,
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+
+            logger.info(f"Интерфейс торговли обновлен для игрока {user.id}")
+
+        except ImportError as e:
+            logger.error(f"Не удалось импортировать модуль торговли: {e}")
+            await update.message.reply_text(
+                f"✅ *Сумма сохранена:* ${amount}\n\n"
+                f"🎮 *Что дальше?*\n"
+                f"Продолжайте оформление сделки с помощью кнопок.",
+                parse_mode="Markdown"
+            )
+
+    except ValueError as e:
+        logger.warning(f"Некорректный ввод от пользователя {user.id}: {text}")
+        await update.message.reply_text(
+            "❌ *Некорректный ввод!*\n\n"
+            "Пожалуйста, введите только цифры (например: 100, 500, 1500):",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в handle_text_input: {e}")
+        await update.message.reply_text(f"❌ Ошибка обработки: {str(e)}")
+        # Очищаем состояние в любом случае
+        if 'awaiting_trade_money' in context.user_data:
+            del context.user_data['awaiting_trade_money']
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отменить ввод суммы для торговли"""
+    user = update.effective_user
+
+    if 'awaiting_trade_money' in context.user_data:
+        del context.user_data['awaiting_trade_money']
+        await update.message.reply_text(
+            "❌ *Ввод суммы отменен*\n\n"
+            "Вы можете продолжить торговлю через меню.",
+            parse_mode="Markdown"
+        )
+        logger.info(f"Пользователь {user.id} отменил ввод суммы")
+    else:
+        await update.message.reply_text(
+            "ℹ️ *Нет активного ввода для отмены*\n\n"
+            "Эта команда используется при вводе суммы денег в торговле.",
+            parse_mode="Markdown"
+        )
+
+# УДАЛИТЬ ПОТОМ
+async def test_trade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестовая команда для проверки торговли"""
+    user = update.effective_user
+
+    print(f"\n🔧 ========== ТЕСТ ТОРГОВЛИ ==========")
+    print(f"👤 Пользователь: {user.id}")
+
+    # Находим игру пользователя
+    game = None
+    for game_id, g in game_manager.games.items():
+        if user.id in g.players:
+            game = g
+            break
+
+    if not game:
+        await update.message.reply_text("❌ Вы не в игре!")
+        return
+
+    print(f"🎮 Игра найдена: {game.game_id}")
+    print(f"👥 Игроков: {len(game.players)}")
+
+    # Проверяем TradeManager
+    if not hasattr(game, 'trade_manager'):
+        await update.message.reply_text("❌ TradeManager не инициализирован!")
+        return
+
+    print(f"✅ TradeManager: {game.trade_manager}")
+
+    # Показываем активные предложения
+    if hasattr(game.trade_manager, 'active_trades'):
+        trades = list(game.trade_manager.active_trades.items())
+        print(f"📊 Активных предложений: {len(trades)}")
+
+        if trades:
+            response = "📋 *АКТИВНЫЕ ПРЕДЛОЖЕНИЯ:*\n\n"
+            for trade_id, trade in trades:
+                response += f"• *ID:* `{trade_id}`\n"
+                response += f"  От: {trade.from_player_id}\n"
+                response += f"  Кому: {trade.to_player_id}\n"
+                response += f"  Статус: {trade.status}\n\n"
+
+            await update.message.reply_text(response, parse_mode="Markdown")
+        else:
+            await update.message.reply_text("📭 Нет активных предложений")
+    else:
+        await update.message.reply_text("❌ Нет active_trades в TradeManager")
+
+    print(f"====================================\n")
+
+async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
+    """Задача для очистки истекших предложений"""
+    for game in game_manager.games.values():
+        if hasattr(game, 'cleanup_expired_trades'):
+            game.cleanup_expired_trades()
 # ========== ЗАПУСК БОТА ==========
 
 def main():
@@ -3426,8 +4713,20 @@ def main():
         ("build_hotel", build_hotel_command),
         ("sell_house", sell_house_command),
         ("houses", houses_command),
+        ("trade", trade_command),  # ← ЭТУ СТРОКУ ДОБАВЬТЕ (если функции нет, создайте её ниже)
+        ("cancel", cancel_command),
+        ("my_trades", my_trades_command),
+        ("trade_accept", trade_accept_command),
+        ("trade_reject", trade_reject_command),
+        ("trade_cancel", trade_cancel_command),
+        ("test_trade", test_trade_command), #удалить после тестов
     ]
-
+    print("\n💬 Регистрируем обработчик текстовых сообщений...")
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
+    print(f"✅ MessageHandler зарегистрирован")
+    job_queue = app.job_queue
+    if job_queue:
+        job_queue.run_repeating(cleanup_job, interval=60, first=10)  # Каждую минуту
 
     # 1. ВСЕ КОМАНДЫ ПЕРВЫМИ
     print("\n📋 Регистрируем команды:")

@@ -11,7 +11,8 @@ from enum import Enum
 # Вместо этого используйте только:
 from config import Config
 from board import Board, BoardCell, PropertyCell, StationCell, UtilityCell, CellType
-
+from src.backend.trade_manager import TradeManager
+from datetime import datetime, timedelta
 
 # Сначала определяем базовые классы и константы
 class GameState(Enum):
@@ -190,6 +191,8 @@ class Game:
         random.shuffle(self.chance_deck)
         random.shuffle(self.chest_deck)
         self.used_colors = set()
+        from src.backend.trade_manager import TradeManager
+        self.trade_manager = TradeManager()
 
     def add_player(self, user_id: int, username: str, full_name: str) -> bool:
         """Добавить игрока в игру"""
@@ -635,10 +638,667 @@ class Game:
             print(f"❌ ОШИБКА в _player_to_dict для игрока {getattr(player, 'user_id', 'unknown')}: {e}")
             raise
 
+    def save_state(self):
+        """Сохранить состояние игры (для торговли)"""
+        try:
+            if hasattr(self, 'game_id'):
+                # Импортируем game_manager
+                from src.backend.game_manager import game_manager
+                if hasattr(game_manager, 'save_game_state'):
+                    game_manager.save_game_state(self.game_id)
+                    print(f"✅ Состояние игры {self.game_id} сохранено")
+                else:
+                    # Резервный метод сохранения
+                    import json
+                    import os
+                    game_data = self.to_dict()
+                    filename = f"data/game_{self.game_id}.json"
+                    with open(filename, 'w', encoding='utf-8') as f:
+                        json.dump(game_data, f, ensure_ascii=False, indent=2)
+                    print(f"✅ Игра {self.game_id} сохранена в файл {filename}")
+        except Exception as e:
+            print(f"❌ Ошибка сохранения состояния игры {self.game_id}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def can_trade_with(self, from_player_id: int, to_player_id: int) -> bool:
+        """Проверить, может ли игрок торговать с другим игроком"""
+        if from_player_id not in self.players or to_player_id not in self.players:
+            return False
+
+        if from_player_id == to_player_id:
+            return False
+
+        from_player = self.players[from_player_id]
+        to_player = self.players[to_player_id]
+
+        # Оба игрока должны быть активны
+        if from_player.status != PlayerStatus.ACTIVE or to_player.status != PlayerStatus.ACTIVE:
+            return False
+
+        # Оба игрока не должны быть в тюрьме
+        if from_player.in_jail or to_player.in_jail:
+            return False
+
+        return True
+
+    # def accept_trade(self, trade_id: str, player_id: int) -> dict:
+    #     """Принять сделку"""
+    #     if not hasattr(self, 'active_trades') or trade_id not in self.active_trades:
+    #         return {"success": False, "error": "Предложение не найдено"}
+    #
+    #     trade = self.active_trades[trade_id]
+    #
+    #     # Проверяем, что игрок принимает правильное предложение
+    #     if trade['to_player'] != player_id:
+    #         return {"success": False, "error": "Это предложение не для вас"}
+    #
+    #     if trade['status'] != 'pending':
+    #         return {"success": False, "error": "Предложение уже обработано"}
+    #
+    #     if datetime.now() > trade['expires_at']:
+    #         return {"success": False, "error": "Предложение истекло"}
+    #
+    #     # Получаем игроков
+    #     from_player = self.players[trade['from_player']]
+    #     to_player = self.players[trade['to_player']]
+    #
+    #     # Проверяем еще раз условия
+    #     # Предложение от from_player
+    #     if 'money' in trade['offer'] and trade['offer']['money'] > 0:
+    #         if from_player.money < trade['offer']['money']:
+    #             return {"success": False, "error": "У предлагающего недостаточно денег"}
+    #
+    #     if 'properties' in trade['offer']:
+    #         for prop_id in trade['offer']['properties']:
+    #             if not from_player.can_trade_property(prop_id, self.board):
+    #                 return {"success": False, "error": f"Собственность {prop_id} больше нельзя обменять"}
+    #
+    #     # Запрос к to_player
+    #     if 'money' in trade['request'] and trade['request']['money'] > 0:
+    #         if to_player.money < trade['request']['money']:
+    #             return {"success": False, "error": "У вас недостаточно денег"}
+    #
+    #     if 'properties' in trade['request']:
+    #         for prop_id in trade['request']['properties']:
+    #             if not to_player.can_trade_property(prop_id, self.board):
+    #                 return {"success": False, "error": f"Собственность {prop_id} больше нельзя отдать"}
+    #
+    #     # Выполняем обмен
+    #     try:
+    #         # Деньги от from_player к to_player
+    #         if 'money' in trade['offer'] and trade['offer']['money'] > 0:
+    #             from_player.deduct_money(trade['offer']['money'])
+    #             to_player.add_money(trade['offer']['money'])
+    #
+    #         # Деньги от to_player к from_player
+    #         if 'money' in trade['request'] and trade['request']['money'] > 0:
+    #             to_player.deduct_money(trade['request']['money'])
+    #             from_player.add_money(trade['request']['money'])
+    #
+    #         # Собственность от from_player к to_player
+    #         if 'properties' in trade['offer']:
+    #             for prop_id in trade['offer']['properties']:
+    #                 cell = self.board.get_cell(prop_id)
+    #                 if cell:
+    #                     # Удаляем у from_player
+    #                     if cell.type == CellType.PROPERTY:
+    #                         if prop_id in from_player.properties:
+    #                             from_player.properties.remove(prop_id)
+    #                             to_player.properties.append(prop_id)
+    #                     elif cell.type == CellType.STATION:
+    #                         if prop_id in from_player.stations:
+    #                             from_player.stations.remove(prop_id)
+    #                             to_player.stations.append(prop_id)
+    #                     elif cell.type == CellType.UTILITY:
+    #                         if prop_id in from_player.utilities:
+    #                             from_player.utilities.remove(prop_id)
+    #                             to_player.utilities.append(prop_id)
+    #
+    #                     # Меняем владельца на клетке
+    #                     cell.owner_id = to_player.user_id
+    #
+    #         # Собственность от to_player к from_player
+    #         if 'properties' in trade['request']:
+    #             for prop_id in trade['request']['properties']:
+    #                 cell = self.board.get_cell(prop_id)
+    #                 if cell:
+    #                     # Удаляем у to_player
+    #                     if cell.type == CellType.PROPERTY:
+    #                         if prop_id in to_player.properties:
+    #                             to_player.properties.remove(prop_id)
+    #                             from_player.properties.append(prop_id)
+    #                     elif cell.type == CellType.STATION:
+    #                         if prop_id in to_player.stations:
+    #                             to_player.stations.remove(prop_id)
+    #                             from_player.stations.append(prop_id)
+    #                     elif cell.type == CellType.UTILITY:
+    #                         if prop_id in to_player.utilities:
+    #                             to_player.utilities.remove(prop_id)
+    #                             from_player.utilities.append(prop_id)
+    #
+    #                     # Меняем владельца на клетке
+    #                     cell.owner_id = from_player.user_id
+    #
+    #         # Обновляем статус предложения
+    #         trade['status'] = 'accepted'
+    #         trade['accepted_at'] = datetime.now()
+    #
+    #         # Удаляем из активных
+    #         del self.active_trades[trade_id]
+    #
+    #         # Добавляем в историю
+    #         if not hasattr(self, 'trade_history'):
+    #             self.trade_history = []
+    #         self.trade_history.append(trade)
+    #
+    #         return {
+    #             "success": True,
+    #             "message": "Сделка успешно завершена!"
+    #         }
+    #
+    #     except Exception as e:
+    #         return {"success": False, "error": f"Ошибка при выполнении сделки: {str(e)}"}
+
+    def reject_trade(self, trade_id: str, player_id: int) -> dict:
+        """Отклонить сделку"""
+        if not hasattr(self, 'active_trades') or trade_id not in self.active_trades:
+            return {"success": False, "error": "Предложение не найдено"}
+
+        trade = self.active_trades[trade_id]
+
+        # Проверяем, что игрок отклоняет правильное предложение
+        if trade['to_player'] != player_id:
+            return {"success": False, "error": "Это предложение не для вас"}
+
+        if trade['status'] != 'pending':
+            return {"success": False, "error": "Предложение уже обработано"}
+
+        # Обновляем статус
+        trade['status'] = 'rejected'
+        trade['rejected_at'] = datetime.now()
+
+        # Удаляем из активных
+        del self.active_trades[trade_id]
+
+        return {
+            "success": True,
+            "message": "Вы отклонили предложение"
+        }
+
+    def cancel_trade(self, trade_id: str, player_id: int) -> dict:
+        """Отменить предложение сделки"""
+        if not hasattr(self, 'active_trades') or trade_id not in self.active_trades:
+            return {"success": False, "error": "Предложение не найдено"}
+
+        trade = self.active_trades[trade_id]
+
+        # Проверяем, что игрок отменяет свое предложение
+        if trade['from_player'] != player_id:
+            return {"success": False, "error": "Вы не можете отменить чужое предложение"}
+
+        if trade['status'] != 'pending':
+            return {"success": False, "error": "Предложение уже обработано"}
+
+        # Обновляем статус
+        trade['status'] = 'cancelled'
+        trade['cancelled_at'] = datetime.now()
+
+        # Удаляем из активных
+        del self.active_trades[trade_id]
+
+        return {
+            "success": True,
+            "message": "Предложение отменено"
+        }
+
+    def get_player_trades(self, player_id: int) -> list:
+        """Получить активные предложения для игрока"""
+        if not hasattr(self, 'active_trades'):
+            return []
+
+        player_trades = []
+        for trade_id, trade in self.active_trades.items():
+            if trade['status'] == 'pending' and (
+                    trade['from_player'] == player_id or
+                    trade['to_player'] == player_id
+            ):
+                player_trades.append(trade)
+
+        return player_trades
+
+        # Здесь НИЧЕГО не должно быть на этом уровне отступа!
+        # Следующий метод начинается с отступа в 4 пробела
+
+    def some_other_method(self):
+        pass
+
+    def propose_trade(self, from_player_id: int, to_player_id: int,
+                      offer: dict, request: dict) -> dict:
+        """Предложить сделку - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+        try:
+            if from_player_id not in self.players or to_player_id not in self.players:
+                return {"success": False, "error": "Игрок не найден"}
+
+            if from_player_id == to_player_id:
+                return {"success": False, "error": "Нельзя торговать с самим собой"}
+
+            from_player = self.players[from_player_id]
+            to_player = self.players[to_player_id]
+
+            # Проверяем статус игроков (более безопасная проверка)
+            from_player_status = getattr(from_player, 'status', None)
+            to_player_status = getattr(to_player, 'status', None)
+
+            # Проверяем статус разными способами
+            is_from_active = False
+            is_to_active = False
+
+            if hasattr(from_player_status, 'value'):
+                is_from_active = from_player_status.value == 'active'
+            elif isinstance(from_player_status, str):
+                is_from_active = from_player_status == 'active'
+            elif from_player_status is None:
+                # Если статус не установлен, считаем активным
+                is_from_active = True
+
+            if hasattr(to_player_status, 'value'):
+                is_to_active = to_player_status.value == 'active'
+            elif isinstance(to_player_status, str):
+                is_to_active = to_player_status == 'active'
+            elif to_player_status is None:
+                is_to_active = True
+
+            if not is_from_active or not is_to_active:
+                return {"success": False, "error": "Игрок неактивен"}
+
+            # Проверяем тюрьму
+            if getattr(from_player, 'in_jail', False) or getattr(to_player, 'in_jail', False):
+                return {"success": False, "error": "Игрок в тюрьме"}
+
+            # Проверяем предложение
+            if 'money' in offer and offer['money'] > 0:
+                if from_player.money < offer['money']:
+                    return {"success": False, "error": "Недостаточно денег для предложения"}
+
+            # Проверяем запрос
+            if 'money' in request and request['money'] > 0:
+                if to_player.money < request['money']:
+                    return {"success": False, "error": "У другого игрока недостаточно денег"}
+
+            # ПРОВЕРКА СОБСТВЕННОСТИ
+            # Проверяем, что предлагаемая собственность принадлежит игроку
+            if 'properties' in offer:
+                for prop_id in offer['properties']:
+                    cell = self.board.get_cell(prop_id)
+                    if not cell:
+                        return {"success": False, "error": f"Собственность {prop_id} не найдена"}
+                    if cell.owner_id != from_player_id:
+                        return {"success": False, "error": f"Собственность {prop_id} вам не принадлежит"}
+                    # Проверяем, не заложена ли собственность
+                    if hasattr(cell, 'mortgaged') and cell.mortgaged:
+                        return {"success": False, "error": f"Собственность {prop_id} в залоге"}
+
+            # Проверяем, что запрашиваемая собственность принадлежит другому игроку
+            if 'properties' in request:
+                for prop_id in request['properties']:
+                    cell = self.board.get_cell(prop_id)
+                    if not cell:
+                        return {"success": False, "error": f"Собственность {prop_id} не найдена"}
+                    if cell.owner_id != to_player_id:
+                        return {"success": False, "error": f"Собственность {prop_id} не принадлежит игроку"}
+                    # Проверяем, не заложена ли собственность
+                    if hasattr(cell, 'mortgaged') and cell.mortgaged:
+                        return {"success": False, "error": f"Собственность {prop_id} в залоге"}
+
+            # Используем TradeManager для создания предложения
+            if hasattr(self.trade_manager, 'create_trade_offer'):
+                # Если метод называется create_trade_offer
+                trade_id = self.trade_manager.create_trade_offer(
+                    from_player_id=from_player_id,
+                    to_player_id=to_player_id,
+                    offer=offer,
+                    request=request,
+                    game_id=self.game_id
+                )
+            elif hasattr(self.trade_manager, 'create_trade'):
+                # Если метод называется create_trade
+                trade_id = self.trade_manager.create_trade(
+                    from_player_id=from_player_id,
+                    to_player_id=to_player_id,
+                    offer=offer,
+                    request=request
+                )
+            else:
+                # Резервный метод создания
+                import uuid
+                from datetime import datetime, timedelta
+                trade_id = f"trade_{from_player_id}_{to_player_id}_{uuid.uuid4().hex[:8]}"
+
+                if not hasattr(self.trade_manager, 'active_trades'):
+                    self.trade_manager.active_trades = {}
+
+                self.trade_manager.active_trades[trade_id] = {
+                    'trade_id': trade_id,
+                    'from_player_id': from_player_id,
+                    'to_player_id': to_player_id,
+                    'offer': offer,
+                    'request': request,
+                    'status': 'pending',
+                    'created_at': datetime.now(),
+                    'expires_at': datetime.now() + timedelta(minutes=5)
+                }
+
+            if trade_id:
+                print(f"✅ Предложение создано: {trade_id}")
+                print(f"   От: {from_player.full_name} (ID: {from_player_id})")
+                print(f"   Кому: {to_player.full_name} (ID: {to_player_id})")
+                print(f"   Предложение: {offer}")
+                print(f"   Запрос: {request}")
+
+                # Сохраняем состояние игры
+                if hasattr(self, 'save_state'):
+                    self.save_state()
+                elif hasattr(self, 'game_id'):
+                    # Используем game_manager если есть
+                    from src.backend.game_manager import game_manager
+                    if hasattr(game_manager, 'save_game_state'):
+                        game_manager.save_game_state(self.game_id)
+
+                return {
+                    "success": True,
+                    "trade_id": trade_id,
+                    "message": "Предложение отправлено"
+                }
+            else:
+                return {"success": False, "error": "Не удалось создать предложение"}
+
+        except Exception as e:
+            print(f"❌ Ошибка в propose_trade: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": f"Системная ошибка: {str(e)}"}
+
+    def accept_trade(self, trade_id: str, player_id: int) -> dict:
+        """Принять сделку - РАБОЧАЯ ВЕРСИЯ С ОБМЕНОМ СОБСТВЕННОСТИ"""
+        print(f"\n🎯 ========== ACCEPT_TRADE CALLED ==========")
+        print(f"📊 trade_id: {trade_id}")
+        print(f"👤 player_id: {player_id}")
+
+        # Проверяем TradeManager
+        if not hasattr(self, 'trade_manager'):
+            print("❌ ERROR: Нет trade_manager в игре")
+            return {"success": False, "error": "Системная ошибка торговли"}
+
+        print(f"✅ TradeManager найден")
+
+        # Проверяем, есть ли метод get_trade
+        if not hasattr(self.trade_manager, 'get_trade'):
+            print("❌ ERROR: У trade_manager нет метода get_trade")
+            # Ищем вручную
+            if hasattr(self.trade_manager, 'active_trades'):
+                trade = self.trade_manager.active_trades.get(trade_id)
+            else:
+                trade = None
+        else:
+            trade = self.trade_manager.get_trade(trade_id)
+
+        if not trade:
+            print(f"❌ ERROR: Предложение {trade_id} не найдено в TradeManager")
+            return {"success": False, "error": "Предложение не найдено или истекло"}
+
+        print(f"✅ Предложение найдено:")
+        print(f"   От: {trade.from_player_id}")
+        print(f"   Кому: {trade.to_player_id}")
+        print(f"   Статус: {trade.status}")
+
+        # Проверяем, правильный ли игрок
+        if trade.to_player_id != player_id:
+            print(f"❌ ERROR: Игрок {player_id} пытается принять предложение для {trade.to_player_id}")
+            return {"success": False, "error": "Это предложение не для вас"}
+
+        # Проверяем статус
+        if trade.status != "pending":
+            print(f"❌ ERROR: Предложение уже обработано, статус: {trade.status}")
+            return {"success": False, "error": "Предложение уже обработано"}
+
+        # Проверяем время
+        from datetime import datetime
+        if datetime.now() > trade.expires_at:
+            print(f"❌ ERROR: Предложение истекло в {trade.expires_at}")
+            trade.status = "expired"
+            if trade_id in self.trade_manager.active_trades:
+                del self.trade_manager.active_trades[trade_id]
+            if hasattr(self.trade_manager, 'trade_history'):
+                self.trade_manager.trade_history.append(trade)
+            return {"success": False, "error": "Время предложения истекло"}
+
+        print(f"✅ Все проверки пройдены, выполняем обмен...")
+
+        try:
+            # Получаем игроков
+            from_player = self.players.get(trade.from_player_id)
+            to_player = self.players.get(trade.to_player_id)
+
+            if not from_player or not to_player:
+                print(f"❌ ERROR: Не найден игрок: from={trade.from_player_id}, to={trade.to_player_id}")
+                return {"success": False, "error": "Один из игроков не найден"}
+
+            # ========== ВЫПОЛНЯЕМ ОБМЕН ДЕНЬГАМИ ==========
+            if trade.offer.get('money', 0) > 0:
+                print(f"💰 Передача денег от {from_player.full_name} к {to_player.full_name}: ${trade.offer['money']}")
+                if not from_player.deduct_money(trade.offer['money']):
+                    return {"success": False, "error": f"У {from_player.full_name} недостаточно денег"}
+                to_player.add_money(trade.offer['money'])
+
+            if trade.request.get('money', 0) > 0:
+                print(f"💰 Передача денег от {to_player.full_name} к {from_player.full_name}: ${trade.request['money']}")
+                if not to_player.deduct_money(trade.request['money']):
+                    return {"success": False, "error": f"У {to_player.full_name} недостаточно денег"}
+                from_player.add_money(trade.request['money'])
+
+            # ========== ВЫПОЛНЯЕМ ОБМЕН СОБСТВЕННОСТЬЮ ==========
+            # Предложение: от from_player к to_player
+            if trade.offer.get('properties'):
+                print(
+                    f"🏠 Передача {len(trade.offer['properties'])} свойств от {from_player.full_name} к {to_player.full_name}")
+                for prop_id in trade.offer['properties']:
+                    cell = self.board.get_cell(prop_id)
+                    if cell:
+                        print(f"   → Собственность: {getattr(cell, 'name', prop_id)}")
+
+                        # Проверяем, что собственность принадлежит отправителю
+                        if cell.owner_id != from_player.user_id:
+                            return {"success": False,
+                                    "error": f"Собственность {cell.name} не принадлежит {from_player.full_name}"}
+
+                        # Определяем тип клетки и удаляем у отправителя
+                        if cell.type == CellType.PROPERTY:
+                            if prop_id in from_player.properties:
+                                from_player.properties.remove(prop_id)
+                                to_player.properties.append(prop_id)
+                                print(f"      Улица передана")
+                        elif cell.type == CellType.STATION:
+                            if prop_id in from_player.stations:
+                                from_player.stations.remove(prop_id)
+                                to_player.stations.append(prop_id)
+                                print(f"      Вокзал передан")
+                        elif cell.type == CellType.UTILITY:
+                            if prop_id in from_player.utilities:
+                                from_player.utilities.remove(prop_id)
+                                to_player.utilities.append(prop_id)
+                                print(f"      Предприятие передано")
+
+                        # Меняем владельца на клетке
+                        cell.owner_id = to_player.user_id
+                        print(f"      Владелец изменен на {to_player.full_name}")
+
+            # Запрос: от to_player к from_player
+            if trade.request.get('properties'):
+                print(
+                    f"🏠 Передача {len(trade.request['properties'])} свойств от {to_player.full_name} к {from_player.full_name}")
+                for prop_id in trade.request['properties']:
+                    cell = self.board.get_cell(prop_id)
+                    if cell:
+                        print(f"   → Собственность: {getattr(cell, 'name', prop_id)}")
+
+                        # Проверяем, что собственность принадлежит получателю
+                        if cell.owner_id != to_player.user_id:
+                            return {"success": False,
+                                    "error": f"Собственность {cell.name} не принадлежит {to_player.full_name}"}
+
+                        # Определяем тип клетки и удаляем у получателя
+                        if cell.type == CellType.PROPERTY:
+                            if prop_id in to_player.properties:
+                                to_player.properties.remove(prop_id)
+                                from_player.properties.append(prop_id)
+                                print(f"      Улица передана")
+                        elif cell.type == CellType.STATION:
+                            if prop_id in to_player.stations:
+                                to_player.stations.remove(prop_id)
+                                from_player.stations.append(prop_id)
+                                print(f"      Вокзал передан")
+                        elif cell.type == CellType.UTILITY:
+                            if prop_id in to_player.utilities:
+                                to_player.utilities.remove(prop_id)
+                                from_player.utilities.append(prop_id)
+                                print(f"      Предприятие передано")
+
+                        # Меняем владельца на клетке
+                        cell.owner_id = from_player.user_id
+                        print(f"      Владелец изменен на {from_player.full_name}")
+
+            # ========== ОБНОВЛЯЕМ СТАТУС ==========
+            trade.status = "accepted"
+            trade.processed_at = datetime.now()
+            print(f"✅ Статус предложения изменен на: accepted")
+
+            # Перемещаем в историю
+            if hasattr(self.trade_manager, 'trade_history'):
+                self.trade_manager.trade_history.append(trade)
+
+            # Удаляем из активных
+            if hasattr(self.trade_manager, 'active_trades') and trade_id in self.trade_manager.active_trades:
+                del self.trade_manager.active_trades[trade_id]
+                print(f"✅ Предложение удалено из активных")
+
+            # Сохраняем состояние игры
+            self.save_state()
+
+            print(f"🎉 Сделка успешно завершена!")
+            print(f"========================================\n")
+
+            return {
+                "success": True,
+                "message": "✅ Сделка успешно завершена! Деньги и собственность обменяны."
+            }
+
+        except Exception as e:
+            print(f"❌ ERROR: Ошибка выполнения сделки: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": f"Ошибка при выполнении: {str(e)}"}
+
+    def reject_trade(self, trade_id: str, player_id: int) -> dict:
+        """Отклонить сделку - УПРОЩЕННАЯ ВЕРСИЯ"""
+        print(f"\n🎯 ========== REJECT_TRADE CALLED ==========")
+        print(f"📊 trade_id: {trade_id}")
+        print(f"👤 player_id: {player_id}")
+
+        if not hasattr(self, 'trade_manager'):
+            return {"success": False, "error": "Системная ошибка"}
+
+        trade = self.trade_manager.get_trade(trade_id)
+        if not trade:
+            return {"success": False, "error": "Предложение не найдено"}
+
+        if trade.to_player_id != player_id:
+            return {"success": False, "error": "Это предложение не для вас"}
+
+        # Просто меняем статус на отклоненный
+        trade.status = "rejected"
+
+        # Удаляем из активных
+        if trade_id in self.trade_manager.active_trades:
+            del self.trade_manager.active_trades[trade_id]
+
+        # Добавляем в историю
+        if hasattr(self.trade_manager, 'trade_history'):
+            self.trade_manager.trade_history.append(trade)
+
+        print(f"✅ Предложение отклонено")
+        print(f"========================================\n")
+
+        return {
+            "success": True,
+            "message": "❌ Предложение отклонено"
+        }
+
+    def cancel_trade(self, trade_id: str, player_id: int) -> dict:
+        """Отменить предложение сделки"""
+        return self.trade_manager.cancel_trade(trade_id, player_id)
+
+    # def get_player_trades(self, player_id: int) -> list:
+    #     """Получить активные предложения для игрока"""
+    #     return self.trade_manager.get_player_trades(player_id)
+
+    def get_player_available_properties(self, player_id: int) -> list:
+        """Получить доступные для торговли свойства игрока"""
+        player = self.players.get(player_id)
+        if not player:
+            return []
+
+        available = []
+
+        # Улицы
+        for prop_id in player.properties:
+            cell = self.board.get_cell(prop_id)
+            if cell and not getattr(cell, 'mortgaged', False):
+                if getattr(cell, 'houses', 0) == 0 and not getattr(cell, 'hotel', False):
+                    available.append({
+                        'type': 'property',
+                        'id': prop_id,
+                        'name': cell.name,
+                        'value': cell.price,
+                        'color_group': getattr(cell, 'color_group', None)
+                    })
+
+        # Вокзалы
+        for station_id in player.stations:
+            cell = self.board.get_cell(station_id)
+            if cell and not getattr(cell, 'mortgaged', False):
+                available.append({
+                    'type': 'station',
+                    'id': station_id,
+                    'name': cell.name,
+                    'value': cell.price
+                })
+
+        # Предприятия
+        for util_id in player.utilities:
+            cell = self.board.get_cell(util_id)
+            if cell and not getattr(cell, 'mortgaged', False):
+                available.append({
+                    'type': 'utility',
+                    'id': util_id,
+                    'name': cell.name,
+                    'value': cell.price
+                })
+
+        return available
+
+    def cleanup_expired_trades(self):
+        """Очистить истекшие предложения"""
+        self.trade_manager.cleanup_expired_trades()
+
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Game':
-        """Создать игру из словаря"""
-        game = cls(data["game_id"], data["creator_id"])
+    def from_dict(cls, data):
+        game = cls(
+            game_id=data['game_id'],
+            creator_id=data['creator_id'],
+            creator_username=data['creator_username'],
+            creator_full_name=data['creator_full_name']
+        )
         if not hasattr(game, 'used_colors'):
             game.used_colors = set()
         game.players = {}
@@ -670,5 +1330,8 @@ class Game:
         game.double_count = data.get("double_count", 0)
         game.turn_count = data.get("turn_count", 0)
         game.free_parking_pot = data.get("free_parking_pot", 0)
+
+        if 'trade_manager' in data:
+            game.trade_manager.load_state(data['trade_manager'])
 
         return game

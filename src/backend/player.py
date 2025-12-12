@@ -4,6 +4,22 @@ from enum import Enum
 from dataclasses import dataclass, field
 
 from config import Config
+try:
+    from src.backend.board import CellType
+except ImportError:
+    # Если не удалось импортировать, создаем локальные константы
+    class CellType:
+        PROPERTY = "property"
+        STATION = "station"
+        UTILITY = "utility"
+        TAX = "tax"
+        CHANCE = "chance"
+        CHEST = "chest"
+        JAIL = "jail"
+        GO_TO_JAIL = "go_to_jail"
+        FREE_PARKING = "free_parking"
+        GO = "go"
+        OTHER = "other"
 
 
 class PlayerStatus(Enum):
@@ -180,6 +196,68 @@ class Player:
             "double_count": self.double_count,
         }
 
+    def get_available_properties_for_trade(self, game_board) -> list:
+        """Получить доступные для торговли свойства"""
+        available = []
+
+        # Улицы
+        for prop_id in self.properties:
+            cell = game_board.get_cell(prop_id)
+            if cell and not getattr(cell, 'mortgaged', False):
+                # Проверяем, нет ли построенных домов
+                if getattr(cell, 'houses', 0) == 0 and not getattr(cell, 'hotel', False):
+                    available.append({
+                        'type': 'property',
+                        'id': prop_id,
+                        'name': cell.name,
+                        'value': cell.price,
+                        'color_group': getattr(cell, 'color_group', None)
+                    })
+
+        # Вокзалы
+        for station_id in self.stations:
+            cell = game_board.get_cell(station_id)
+            if cell and not getattr(cell, 'mortgaged', False):
+                available.append({
+                    'type': 'station',
+                    'id': station_id,
+                    'name': cell.name,
+                    'value': cell.price
+                })
+
+        # Предприятия
+        for util_id in self.utilities:
+            cell = game_board.get_cell(util_id)
+            if cell and not getattr(cell, 'mortgaged', False):
+                available.append({
+                    'type': 'utility',
+                    'id': util_id,
+                    'name': cell.name,
+                    'value': cell.price
+                })
+
+        return available
+
+    def can_trade_property(self, property_id: int, game_board) -> bool:
+        """Можно ли торговать этой собственностью"""
+        cell = game_board.get_cell(property_id)
+        if not cell:
+            return False
+
+        # Проверяем, что собственность принадлежит игроку
+        if getattr(cell, 'owner_id', None) != self.user_id:
+            return False
+
+        # Проверяем, что не заложена
+        if getattr(cell, 'mortgaged', False):
+            return False
+
+        # Для улиц: проверяем, что нет домов
+        if cell.type == CellType.PROPERTY:
+            if getattr(cell, 'houses', 0) > 0 or getattr(cell, 'hotel', False):
+                return False
+
+        return True
     @classmethod
     def from_dict(cls, data: Dict) -> 'Player':
         """Создать игрока из словаря"""
